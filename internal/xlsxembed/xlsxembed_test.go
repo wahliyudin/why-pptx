@@ -158,6 +158,57 @@ func TestPreservesSheetExtras(t *testing.T) {
 	}
 }
 
+func TestGetRangeValuesColumn(t *testing.T) {
+	data := buildTestXLSX(t)
+	wb, err := Open(data)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	values, err := wb.GetRangeValues("Sheet1", "A1", "A2")
+	if err != nil {
+		t.Fatalf("GetRangeValues: %v", err)
+	}
+	if len(values) != 2 {
+		t.Fatalf("expected 2 values, got %d", len(values))
+	}
+	if values[0] != "1" || values[1] != "" {
+		t.Fatalf("unexpected values: %#v", values)
+	}
+}
+
+func TestGetRangeValuesRow(t *testing.T) {
+	data := buildTestXLSX(t)
+	wb, err := Open(data)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	text := "hello"
+	if err := wb.SetCell("Sheet1", "B1", CellValue{String: &text}); err != nil {
+		t.Fatalf("SetCell: %v", err)
+	}
+	updated, err := wb.Save()
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	wb, err = Open(updated)
+	if err != nil {
+		t.Fatalf("Open updated: %v", err)
+	}
+
+	values, err := wb.GetRangeValues("Sheet1", "A1", "B1")
+	if err != nil {
+		t.Fatalf("GetRangeValues: %v", err)
+	}
+	if len(values) != 2 {
+		t.Fatalf("expected 2 values, got %d", len(values))
+	}
+	if values[0] != "1" || values[1] != "hello" {
+		t.Fatalf("unexpected values: %#v", values)
+	}
+}
+
 func buildTestXLSX(t *testing.T) []byte {
 	t.Helper()
 

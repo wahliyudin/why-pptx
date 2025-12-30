@@ -142,6 +142,72 @@ func (wb *Workbook) Save() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+func (wb *Workbook) GetRangeValues(sheetName, startCell, endCell string) ([]string, error) {
+	if wb == nil || wb.reader == nil {
+		return nil, fmt.Errorf("workbook not initialized")
+	}
+	if sheetName == "" {
+		return nil, fmt.Errorf("sheet name is required")
+	}
+
+	sheetPath, ok := wb.sheets[sheetName]
+	if !ok {
+		return nil, fmt.Errorf("sheet %q not found", sheetName)
+	}
+
+	startCol, startRow, startRef, err := xlref.SplitCellRef(startCell)
+	if err != nil {
+		return nil, fmt.Errorf("invalid start cell %q: %w", startCell, err)
+	}
+	endCol, endRow, endRef, err := xlref.SplitCellRef(endCell)
+	if err != nil {
+		return nil, fmt.Errorf("invalid end cell %q: %w", endCell, err)
+	}
+
+	if startCol != endCol && startRow != endRow {
+		return nil, fmt.Errorf("2D range %s:%s not supported", startRef, endRef)
+	}
+
+	if startCol == endCol && startRow > endRow {
+		startRow, endRow = endRow, startRow
+	}
+	if startRow == endRow && colToIndex(startCol) > colToIndex(endCol) {
+		startCol, endCol = endCol, startCol
+	}
+
+	targets := make(map[string]struct{})
+	var ordered []string
+	if startCol == endCol {
+		for row := startRow; row <= endRow; row++ {
+			ref := fmt.Sprintf("%s%d", startCol, row)
+			ordered = append(ordered, ref)
+			targets[ref] = struct{}{}
+		}
+	} else {
+		for col := colToIndex(startCol); col <= colToIndex(endCol); col++ {
+			ref := fmt.Sprintf("%s%d", indexToCol(col), startRow)
+			ordered = append(ordered, ref)
+			targets[ref] = struct{}{}
+		}
+	}
+
+	data, err := wb.readPart(sheetPath)
+	if err != nil {
+		return nil, fmt.Errorf("read sheet %q: %w", sheetPath, err)
+	}
+
+	values, err := readCellValues(data, targets)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]string, len(ordered))
+	for i, ref := range ordered {
+		out[i] = values[ref]
+	}
+	return out, nil
+}
+
 func (wb *Workbook) loadSheets() (map[string]string, error) {
 	workbookData, err := wb.readPart("xl/workbook.xml")
 	if err != nil {
@@ -504,6 +570,95 @@ func writeUpdatedCell(decoder *xml.Decoder, encoder *xml.Encoder, start xml.Star
 	return nil
 }
 
+func readCellValues(data []byte, targets map[string]struct{}) (map[string]string, error) {
+	decoder := xml.NewDecoder(bytes.NewReader(data))
+	values := make(map[string]string, len(targets))
+
+	var inCell bool
+	var cellRef string
+	var cellType string
+	var inValue bool
+	var valueBuf strings.Builder
+
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("parse worksheet: %w", err)
+		}
+
+		switch tok := token.(type) {
+		case xml.StartElement:
+			switch tok.Name.Local {
+			case "c":
+				cellRef = ""
+				cellType = ""
+				inCell = false
+				for _, attr := range tok.Attr {
+					if attr.Name.Local == "r" {
+						cellRef = attr.Value
+					} else if attr.Name.Local == "t" {
+						cellType = attr.Value
+					}
+				}
+				if cellRef != "" {
+					normalized, err := xlref.NormalizeCellRef(cellRef)
+					if err == nil {
+						if _, ok := targets[normalized]; ok {
+							if cellType != "" && cellType != "n" && cellType != "inlineStr" {
+								return nil, fmt.Errorf("unsupported cell type %q at %s", cellType, normalized)
+							}
+							cellRef = normalized
+							inCell = true
+						}
+					}
+				}
+			case "v":
+				if inCell && (cellType == "" || cellType == "n") {
+					inValue = true
+					valueBuf.Reset()
+				}
+			case "t":
+				if inCell && cellType == "inlineStr" {
+					inValue = true
+					valueBuf.Reset()
+				}
+			}
+		case xml.EndElement:
+			switch tok.Name.Local {
+			case "c":
+				if inCell {
+					val := valueBuf.String()
+					if cellType == "" || cellType == "n" {
+						val = strings.TrimSpace(val)
+					}
+					values[cellRef] = val
+				}
+				inCell = false
+				inValue = false
+				cellRef = ""
+				cellType = ""
+			case "v", "t":
+				inValue = false
+			}
+		case xml.CharData:
+			if inCell && inValue {
+				valueBuf.Write([]byte(tok))
+			}
+		}
+	}
+
+	for ref := range targets {
+		if _, ok := values[ref]; !ok {
+			values[ref] = ""
+		}
+	}
+
+	return values, nil
+}
+
 func writePendingCells(encoder *xml.Encoder, cellName xml.Name, pending map[string]cellUpdate) {
 	if len(pending) == 0 {
 		return
@@ -746,4 +901,31 @@ func compressData(method uint16, data []byte) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("unsupported compression method: %d", method)
 	}
+}
+
+func colToIndex(col string) int {
+	index := 0
+	for i := 0; i < len(col); i++ {
+		ch := col[i]
+		if ch < 'A' || ch > 'Z' {
+			return 0
+		}
+		index = index*26 + int(ch-'A'+1)
+	}
+	return index
+}
+
+func indexToCol(index int) string {
+	if index <= 0 {
+		return ""
+	}
+	var buf [8]byte
+	pos := len(buf)
+	for index > 0 {
+		index--
+		buf[pos-1] = byte('A' + (index % 26))
+		pos--
+		index /= 26
+	}
+	return string(buf[pos:])
 }

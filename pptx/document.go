@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 
+	"why-pptx/internal/chartcache"
 	"why-pptx/internal/chartdiscover"
 	"why-pptx/internal/chartxml"
 	"why-pptx/internal/ooxmlpkg"
@@ -367,6 +368,68 @@ func (d *Document) SetWorkbookCells(updates []CellUpdate) error {
 	return nil
 }
 
+func (d *Document) SyncChartCaches() error {
+	if d == nil || d.pkg == nil {
+		return fmt.Errorf("document not initialized")
+	}
+
+	deps, err := d.GetChartDependencies()
+	if err != nil {
+		return err
+	}
+	if len(deps) == 0 {
+		return nil
+	}
+
+	for _, dep := range deps {
+		chartData, err := d.pkg.ReadPart(dep.ChartPath)
+		if err != nil {
+			if err := d.handleChartCacheError(dep, fmt.Errorf("read chart %q: %w", dep.ChartPath, err)); err != nil {
+				return err
+			}
+			continue
+		}
+
+		wbData, err := d.pkg.ReadPart(dep.WorkbookPath)
+		if err != nil {
+			if err := d.handleChartCacheError(dep, fmt.Errorf("read workbook %q: %w", dep.WorkbookPath, err)); err != nil {
+				return err
+			}
+			continue
+		}
+
+		wb, err := xlsxembed.Open(wbData)
+		if err != nil {
+			if err := d.handleChartCacheError(dep, fmt.Errorf("open workbook %q: %w", dep.WorkbookPath, err)); err != nil {
+				return err
+			}
+			continue
+		}
+
+		cacheDeps, err := toCacheDeps(dep)
+		if err != nil {
+			if err := d.handleChartCacheError(dep, err); err != nil {
+				return err
+			}
+			continue
+		}
+
+		updated, err := chartcache.SyncCaches(chartData, cacheDeps, func(sheet, start, end string) ([]string, error) {
+			return wb.GetRangeValues(sheet, start, end)
+		})
+		if err != nil {
+			if err := d.handleChartCacheError(dep, err); err != nil {
+				return err
+			}
+			continue
+		}
+
+		d.pkg.WritePart(dep.ChartPath, updated)
+	}
+
+	return nil
+}
+
 // Close is a no-op in v0; Document does not hold OS resources yet.
 func (d *Document) Close() error {
 	return nil
@@ -451,6 +514,56 @@ func (d *Document) handleWorkbookUpdateError(update CellUpdate, err error) error
 			"workbook": update.WorkbookPath,
 			"sheet":    update.Sheet,
 			"cell":     update.Cell,
+			"error":    err.Error(),
+		},
+	})
+
+	return nil
+}
+
+func toCacheDeps(dep ChartDependencies) (chartcache.Dependencies, error) {
+	ranges := make([]chartcache.Range, len(dep.Ranges))
+	for i, r := range dep.Ranges {
+		var kind chartcache.RangeKind
+		switch r.Kind {
+		case RangeCategories:
+			kind = chartcache.KindCategories
+		case RangeValues:
+			kind = chartcache.KindValues
+		case RangeSeriesName:
+			kind = chartcache.KindSeriesName
+		default:
+			return chartcache.Dependencies{}, fmt.Errorf("unsupported range kind %q", r.Kind)
+		}
+
+		ranges[i] = chartcache.Range{
+			Kind:        kind,
+			SeriesIndex: r.SeriesIndex,
+			Sheet:       r.Sheet,
+			StartCell:   r.StartCell,
+			EndCell:     r.EndCell,
+		}
+	}
+
+	return chartcache.Dependencies{
+		ChartType: dep.ChartType,
+		Ranges:    ranges,
+	}, nil
+}
+
+func (d *Document) handleChartCacheError(dep ChartDependencies, err error) error {
+	if d.errMode != BestEffort {
+		return err
+	}
+
+	d.addAlert(Alert{
+		Level:   "warn",
+		Code:    "CHART_CACHE_SYNC_FAILED",
+		Message: "Failed to sync chart caches; chart is skipped",
+		Context: map[string]string{
+			"slide":    dep.SlidePath,
+			"chart":    dep.ChartPath,
+			"workbook": dep.WorkbookPath,
 			"error":    err.Error(),
 		},
 	})
