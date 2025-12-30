@@ -1,6 +1,11 @@
 package pptx
 
-import "why-pptx/internal/ooxmlpkg"
+import (
+	"fmt"
+
+	"why-pptx/internal/chartdiscover"
+	"why-pptx/internal/ooxmlpkg"
+)
 
 type Alert struct {
 	Level   string
@@ -25,6 +30,12 @@ type Document struct {
 	strict bool
 }
 
+type EmbeddedChart struct {
+	SlidePath    string
+	ChartPath    string
+	WorkbookPath string
+}
+
 func OpenFile(path string, opts ...Option) (*Document, error) {
 	pkg, err := ooxmlpkg.OpenFile(path)
 	if err != nil {
@@ -46,6 +57,80 @@ func OpenFile(path string, opts ...Option) (*Document, error) {
 
 func (d *Document) SaveFile(path string) error {
 	return d.pkg.SaveFile(path)
+}
+
+func (d *Document) DiscoverEmbeddedCharts() ([]EmbeddedChart, error) {
+	if d == nil || d.pkg == nil {
+		return nil, fmt.Errorf("document not initialized")
+	}
+
+	embedded, skipped, err := chartdiscover.DiscoverEmbeddedCharts(d.pkg)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, skip := range skipped {
+		switch skip.Reason {
+		case chartdiscover.ReasonLinked:
+			d.addAlert(Alert{
+				Level:   "warn",
+				Code:    "CHART_LINKED_WORKBOOK",
+				Message: "Chart uses linked workbook and is skipped",
+				Context: map[string]string{
+					"slide":  skip.SlidePath,
+					"chart":  skip.ChartPath,
+					"target": skip.Target,
+				},
+			})
+		case chartdiscover.ReasonRelsMissing:
+			d.addAlert(Alert{
+				Level:   "warn",
+				Code:    "CHART_RELS_MISSING",
+				Message: "Chart relationships file is missing; chart is skipped",
+				Context: map[string]string{
+					"slide":     skip.SlidePath,
+					"chart":     skip.ChartPath,
+					"rels_path": skip.RelsPath,
+				},
+			})
+		case chartdiscover.ReasonWorkbookNotFound:
+			d.addAlert(Alert{
+				Level:   "warn",
+				Code:    "CHART_WORKBOOK_NOT_FOUND",
+				Message: "No workbook relationship found for chart; chart is skipped",
+				Context: map[string]string{
+					"slide": skip.SlidePath,
+					"chart": skip.ChartPath,
+				},
+			})
+		case chartdiscover.ReasonUnsupported:
+			d.addAlert(Alert{
+				Level:   "warn",
+				Code:    "CHART_WORKBOOK_UNSUPPORTED_TARGET",
+				Message: "Chart workbook target is unsupported; chart is skipped",
+				Context: map[string]string{
+					"slide":  skip.SlidePath,
+					"chart":  skip.ChartPath,
+					"target": skip.Target,
+				},
+			})
+		}
+	}
+
+	if len(embedded) == 0 {
+		return []EmbeddedChart{}, nil
+	}
+
+	out := make([]EmbeddedChart, len(embedded))
+	for i, item := range embedded {
+		out[i] = EmbeddedChart{
+			SlidePath:    item.SlidePath,
+			ChartPath:    item.ChartPath,
+			WorkbookPath: item.WorkbookPath,
+		}
+	}
+
+	return out, nil
 }
 
 // Close is a no-op in v0; Document does not hold OS resources yet.
