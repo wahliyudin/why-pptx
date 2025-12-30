@@ -12,6 +12,38 @@ type RangeRef struct {
 	EndCell   string
 }
 
+func NormalizeCellRef(cell string) (string, error) {
+	return parseCell(cell)
+}
+
+func SplitCellRef(cell string) (string, int, string, error) {
+	normalized, err := parseCell(cell)
+	if err != nil {
+		return "", 0, "", err
+	}
+
+	i := 0
+	for i < len(normalized) {
+		ch := normalized[i]
+		if ch >= 'A' && ch <= 'Z' {
+			i++
+			continue
+		}
+		break
+	}
+	if i == 0 || i == len(normalized) {
+		return "", 0, "", fmt.Errorf("invalid cell reference")
+	}
+
+	col := normalized[:i]
+	row, err := strconv.Atoi(normalized[i:])
+	if err != nil || row <= 0 {
+		return "", 0, "", fmt.Errorf("invalid cell reference")
+	}
+
+	return col, row, normalized, nil
+}
+
 func ParseA1Range(formula string) (RangeRef, error) {
 	trimmed := strings.TrimSpace(formula)
 	if trimmed == "" {

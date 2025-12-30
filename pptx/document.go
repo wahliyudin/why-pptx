@@ -8,6 +8,7 @@ import (
 	"why-pptx/internal/chartxml"
 	"why-pptx/internal/ooxmlpkg"
 	"why-pptx/internal/xlref"
+	"why-pptx/internal/xlsxembed"
 )
 
 type Alert struct {
@@ -63,6 +64,26 @@ type ChartDependencies struct {
 	WorkbookPath string
 	ChartType    string
 	Ranges       []ChartRange
+}
+
+type CellValue struct {
+	Number *float64
+	String *string
+}
+
+func Num(value float64) CellValue {
+	return CellValue{Number: &value}
+}
+
+func Str(value string) CellValue {
+	return CellValue{String: &value}
+}
+
+type CellUpdate struct {
+	WorkbookPath string
+	Sheet        string
+	Cell         string
+	Value        CellValue
 }
 
 type ErrorMode int
@@ -249,6 +270,103 @@ func (d *Document) DiscoverEmbeddedCharts() ([]EmbeddedChart, error) {
 	return out, nil
 }
 
+func (d *Document) SetWorkbookCells(updates []CellUpdate) error {
+	if d == nil || d.pkg == nil {
+		return fmt.Errorf("document not initialized")
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+
+	updatesByWorkbook := make(map[string][]CellUpdate)
+	for _, update := range updates {
+		updatesByWorkbook[update.WorkbookPath] = append(updatesByWorkbook[update.WorkbookPath], update)
+	}
+
+	for workbookPath, wbUpdates := range updatesByWorkbook {
+		if workbookPath == "" {
+			if err := d.handleWorkbookUpdateError(CellUpdate{}, fmt.Errorf("workbook path is required")); err != nil {
+				return err
+			}
+			continue
+		}
+
+		data, err := d.pkg.ReadPart(workbookPath)
+		if err != nil {
+			if err := d.handleWorkbookUpdateError(wbUpdates[0], fmt.Errorf("read workbook %q: %w", workbookPath, err)); err != nil {
+				return err
+			}
+			continue
+		}
+
+		wb, err := xlsxembed.Open(data)
+		if err != nil {
+			if err := d.handleWorkbookUpdateError(wbUpdates[0], fmt.Errorf("open workbook %q: %w", workbookPath, err)); err != nil {
+				return err
+			}
+			continue
+		}
+
+		applyFailed := false
+		var applyErr error
+		var failedUpdate CellUpdate
+
+		for _, update := range wbUpdates {
+			normalized, err := xlref.NormalizeCellRef(update.Cell)
+			if err != nil {
+				applyFailed = true
+				applyErr = fmt.Errorf("invalid cell %q: %w", update.Cell, err)
+				failedUpdate = update
+				break
+			}
+			update.Cell = normalized
+
+			if update.Sheet == "" {
+				applyFailed = true
+				applyErr = fmt.Errorf("sheet name is required")
+				failedUpdate = update
+				break
+			}
+
+			if err := validateCellValue(update.Value); err != nil {
+				applyFailed = true
+				applyErr = err
+				failedUpdate = update
+				break
+			}
+
+			if err := wb.SetCell(update.Sheet, update.Cell, xlsxembed.CellValue{
+				Number: update.Value.Number,
+				String: update.Value.String,
+			}); err != nil {
+				applyFailed = true
+				applyErr = err
+				failedUpdate = update
+				break
+			}
+		}
+
+		if applyFailed {
+			if err := d.handleWorkbookUpdateError(failedUpdate, fmt.Errorf("update workbook %q: %w", workbookPath, applyErr)); err != nil {
+				return err
+			}
+			continue
+		}
+
+		newBytes, err := wb.Save()
+		if err != nil {
+			if err := d.handleWorkbookUpdateError(wbUpdates[0], fmt.Errorf("save workbook %q: %w", workbookPath, err)); err != nil {
+				return err
+			}
+			continue
+		}
+
+		d.pkg.WritePart(workbookPath, newBytes)
+	}
+
+	return nil
+}
+
 // Close is a no-op in v0; Document does not hold OS resources yet.
 func (d *Document) Close() error {
 	return nil
@@ -308,6 +426,36 @@ func WithErrorMode(mode ErrorMode) Option {
 		}
 		d.errMode = mode
 	}
+}
+
+func validateCellValue(value CellValue) error {
+	if value.Number == nil && value.String == nil {
+		return fmt.Errorf("cell value must specify number or string")
+	}
+	if value.Number != nil && value.String != nil {
+		return fmt.Errorf("cell value must specify exactly one of number or string")
+	}
+	return nil
+}
+
+func (d *Document) handleWorkbookUpdateError(update CellUpdate, err error) error {
+	if d.errMode != BestEffort {
+		return err
+	}
+
+	d.addAlert(Alert{
+		Level:   "warn",
+		Code:    "WORKBOOK_UPDATE_FAILED",
+		Message: "Failed to update workbook cell; workbook is skipped",
+		Context: map[string]string{
+			"workbook": update.WorkbookPath,
+			"sheet":    update.Sheet,
+			"cell":     update.Cell,
+			"error":    err.Error(),
+		},
+	})
+
+	return nil
 }
 
 type noopLogger struct{}
