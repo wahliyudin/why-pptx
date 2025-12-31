@@ -63,6 +63,29 @@ if err := doc.SaveFile("out.pptx"); err != nil {
 }
 ```
 
+## List charts by title
+
+```go
+charts, err := doc.ListCharts()
+if err != nil {
+	// handle error
+}
+for _, chart := range charts {
+	// chart.Title, chart.ChartPath, chart.SeriesCount...
+}
+
+err = doc.ApplyChartDataByName("Revenue", map[string][]string{
+	"categories": {"Q1", "Q2"},
+	"values:0":   {"10", "20"},
+})
+if err != nil {
+	// handle error (ambiguous or not found)
+}
+```
+
+If multiple charts share the same title/alt text, ApplyChartDataByName returns
+an error (BestEffort also emits a CHART_NAME_AMBIGUOUS alert).
+
 ## Options
 
 - `Options.Mode`: `Strict` (default) or `BestEffort`.
