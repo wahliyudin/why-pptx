@@ -163,6 +163,112 @@ func TestSyncChartCachesStrictFails(t *testing.T) {
 	}
 }
 
+func TestSyncChartCachesDisabledNoop(t *testing.T) {
+	dir := t.TempDir()
+	inputPath := filepath.Join(dir, "input.pptx")
+	outputPath := filepath.Join(dir, "output.pptx")
+
+	workbook := buildWorkbookWithValues(t, "Cat1", "Cat2", 10, 20)
+	chartXML := chartWithCaches("Sheet1!$A$2:$A$3", "Sheet1!$B$2:$B$3", []string{"Old1", "Old2"}, []string{"1", "2"})
+	parts := map[string][]byte{
+		"ppt/slides/slide1.xml": []byte("<slide/>"),
+		"ppt/slides/_rels/slide1.xml.rels": []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>
+</Relationships>`),
+		"ppt/charts/chart1.xml": chartXML,
+		"ppt/charts/_rels/chart1.xml.rels": []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="../embeddings/embeddedWorkbook1.xlsx"/>
+</Relationships>`),
+		"ppt/embeddings/embeddedWorkbook1.xlsx": workbook,
+	}
+
+	if err := writeZipFile(inputPath, parts); err != nil {
+		t.Fatalf("writeZipFile: %v", err)
+	}
+
+	opts := DefaultOptions()
+	opts.Chart.CacheSync = false
+	doc, err := OpenFile(inputPath, WithOptions(opts))
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	if err := doc.SyncChartCaches(); err != nil {
+		t.Fatalf("SyncChartCaches: %v", err)
+	}
+	if err := doc.SaveFile(outputPath); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+
+	outChart := readZipEntry(t, outputPath, "ppt/charts/chart1.xml")
+	if !bytes.Equal(outChart, chartXML) {
+		t.Fatalf("chart xml changed with CacheSync disabled")
+	}
+}
+
+func TestSyncChartCachesMissingNumericPolicy(t *testing.T) {
+	cases := []struct {
+		name   string
+		policy MissingNumericPolicy
+		want   string
+	}{
+		{name: "empty", policy: MissingNumericEmpty, want: ""},
+		{name: "zero", policy: MissingNumericZero, want: "0"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			inputPath := filepath.Join(dir, "input.pptx")
+
+			workbook := buildWorkbookWithMissingNumeric(t, "Cat1", "Cat2", 10)
+			parts := map[string][]byte{
+				"ppt/slides/slide1.xml": []byte("<slide/>"),
+				"ppt/slides/_rels/slide1.xml.rels": []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/>
+</Relationships>`),
+				"ppt/charts/chart1.xml": chartWithCaches("Sheet1!$A$2:$A$3", "Sheet1!$B$2:$B$3", []string{"Old1", "Old2"}, []string{"1", "2"}),
+				"ppt/charts/_rels/chart1.xml.rels": []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="../embeddings/embeddedWorkbook1.xlsx"/>
+</Relationships>`),
+				"ppt/embeddings/embeddedWorkbook1.xlsx": workbook,
+			}
+
+			if err := writeZipFile(inputPath, parts); err != nil {
+				t.Fatalf("writeZipFile: %v", err)
+			}
+
+			opts := DefaultOptions()
+			opts.Workbook.MissingNumericPolicy = tc.policy
+			doc, err := OpenFile(inputPath, WithOptions(opts))
+			if err != nil {
+				t.Fatalf("OpenFile: %v", err)
+			}
+
+			if err := doc.SyncChartCaches(); err != nil {
+				t.Fatalf("SyncChartCaches: %v", err)
+			}
+
+			outputPath := filepath.Join(dir, "output.pptx")
+			if err := doc.SaveFile(outputPath); err != nil {
+				t.Fatalf("SaveFile: %v", err)
+			}
+			outChart := readZipEntry(t, outputPath, "ppt/charts/chart1.xml")
+			_, nums := extractChartCacheValues(t, outChart)
+			if len(nums) != 2 {
+				t.Fatalf("expected 2 numeric cache values, got %d", len(nums))
+			}
+			if nums[1] != tc.want {
+				t.Fatalf("expected missing numeric %q, got %q", tc.want, nums[1])
+			}
+		})
+	}
+}
+
 func chartWithCaches(catFormula, valFormula string, catValues, valValues []string) []byte {
 	var catBuf bytes.Buffer
 	for i, v := range catValues {
@@ -339,4 +445,41 @@ func intToString(value int) string {
 
 func floatToString(value float64) string {
 	return strconv.FormatFloat(value, 'f', -1, 64)
+}
+
+func buildWorkbookWithMissingNumeric(t *testing.T, cat1, cat2 string, val1 float64) []byte {
+	t.Helper()
+
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="2">
+      <c r="A2" t="inlineStr"><is><t>` + cat1 + `</t></is></c>
+      <c r="B2"><v>` + floatToString(val1) + `</v></c>
+    </row>
+    <row r="3">
+      <c r="A3" t="inlineStr"><is><t>` + cat2 + `</t></is></c>
+    </row>
+  </sheetData>
+</worksheet>`
+
+	parts := map[string][]byte{
+		"[Content_Types].xml": []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>`),
+		"xl/workbook.xml": []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>`),
+		"xl/_rels/workbook.xml.rels": []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>`),
+		"xl/worksheets/sheet1.xml": []byte(xml),
+	}
+
+	return writeZipBytes(t, parts)
 }

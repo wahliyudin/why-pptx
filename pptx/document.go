@@ -3,6 +3,8 @@ package pptx
 import (
 	"bytes"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"why-pptx/internal/chartcache"
 	"why-pptx/internal/chartdiscover"
@@ -29,11 +31,11 @@ type Logger interface {
 type Option func(*Document)
 
 type Document struct {
-	pkg     *ooxmlpkg.Package
-	alerts  []Alert
-	logger  Logger
-	strict  bool
-	errMode ErrorMode
+	pkg    *ooxmlpkg.Package
+	alerts []Alert
+	logger Logger
+	strict bool
+	opts   Options
 }
 
 type EmbeddedChart struct {
@@ -87,12 +89,43 @@ type CellUpdate struct {
 	Value        CellValue
 }
 
+type Options struct {
+	Mode     ErrorMode
+	Chart    ChartOptions
+	Workbook WorkbookOptions
+}
+
+type ChartOptions struct {
+	CacheSync bool
+}
+
+type WorkbookOptions struct {
+	MissingNumericPolicy MissingNumericPolicy
+}
+
+type MissingNumericPolicy int
+
+const (
+	MissingNumericEmpty MissingNumericPolicy = iota
+	MissingNumericZero
+)
+
 type ErrorMode int
 
 const (
 	Strict ErrorMode = iota
 	BestEffort
 )
+
+func DefaultOptions() Options {
+	return Options{
+		Mode:  Strict,
+		Chart: ChartOptions{CacheSync: true},
+		Workbook: WorkbookOptions{
+			MissingNumericPolicy: MissingNumericEmpty,
+		},
+	}
+}
 
 func OpenFile(path string, opts ...Option) (*Document, error) {
 	pkg, err := ooxmlpkg.OpenFile(path)
@@ -101,9 +134,9 @@ func OpenFile(path string, opts ...Option) (*Document, error) {
 	}
 
 	doc := &Document{
-		pkg:     pkg,
-		logger:  noopLogger{},
-		errMode: Strict,
+		pkg:    pkg,
+		logger: noopLogger{},
+		opts:   DefaultOptions(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -132,7 +165,7 @@ func (d *Document) GetChartDependencies() ([]ChartDependencies, error) {
 	for _, chart := range charts {
 		dep, err := d.extractChartDependencies(chart)
 		if err != nil {
-			if d.errMode == BestEffort {
+			if d.opts.Mode == BestEffort {
 				d.addAlert(Alert{
 					Level:   "warn",
 					Code:    "CHART_DEPENDENCIES_PARSE_FAILED",
@@ -372,6 +405,9 @@ func (d *Document) SyncChartCaches() error {
 	if d == nil || d.pkg == nil {
 		return fmt.Errorf("document not initialized")
 	}
+	if !d.opts.Chart.CacheSync {
+		return nil
+	}
 
 	deps, err := d.GetChartDependencies()
 	if err != nil {
@@ -414,8 +450,12 @@ func (d *Document) SyncChartCaches() error {
 			continue
 		}
 
-		updated, err := chartcache.SyncCaches(chartData, cacheDeps, func(sheet, start, end string) ([]string, error) {
-			return wb.GetRangeValues(sheet, start, end)
+		updated, err := chartcache.SyncCaches(chartData, cacheDeps, func(kind chartcache.RangeKind, sheet, start, end string) ([]string, error) {
+			policy := xlsxembed.MissingNumericEmpty
+			if kind == chartcache.KindValues {
+				policy = xlsxembed.MissingNumericPolicy(d.opts.Workbook.MissingNumericPolicy)
+			}
+			return wb.GetRangeValues(sheet, start, end, policy)
 		})
 		if err != nil {
 			if err := d.handleChartCacheError(dep, err); err != nil {
@@ -427,6 +467,89 @@ func (d *Document) SyncChartCaches() error {
 		d.pkg.WritePart(dep.ChartPath, updated)
 	}
 
+	return nil
+}
+
+func (d *Document) ApplyChartData(chartIndex int, data map[string][]string) error {
+	if d == nil || d.pkg == nil {
+		return fmt.Errorf("document not initialized")
+	}
+	if chartIndex < 0 {
+		return fmt.Errorf("chart index out of range")
+	}
+
+	deps, err := d.GetChartDependencies()
+	if err != nil {
+		return err
+	}
+	if chartIndex >= len(deps) {
+		return fmt.Errorf("chart index out of range")
+	}
+
+	dep := deps[chartIndex]
+	updates := make([]CellUpdate, 0)
+
+	for _, r := range dep.Ranges {
+		switch r.Kind {
+		case RangeCategories:
+			categories, ok := data["categories"]
+			if !ok {
+				return fmt.Errorf("categories data is required")
+			}
+			cells, err := expandRangeCells(r.StartCell, r.EndCell)
+			if err != nil {
+				return err
+			}
+			if len(categories) != len(cells) {
+				return fmt.Errorf("categories length mismatch: expected %d got %d", len(cells), len(categories))
+			}
+			for i, cell := range cells {
+				updates = append(updates, CellUpdate{
+					WorkbookPath: dep.WorkbookPath,
+					Sheet:        r.Sheet,
+					Cell:         cell,
+					Value:        Str(categories[i]),
+				})
+			}
+		case RangeValues:
+			key := fmt.Sprintf("values:%d", r.SeriesIndex)
+			values, ok := data[key]
+			if !ok {
+				return fmt.Errorf("values data missing for series %d", r.SeriesIndex)
+			}
+			cells, err := expandRangeCells(r.StartCell, r.EndCell)
+			if err != nil {
+				return err
+			}
+			if len(values) != len(cells) {
+				return fmt.Errorf("values length mismatch for series %d: expected %d got %d", r.SeriesIndex, len(cells), len(values))
+			}
+			for i, cell := range cells {
+				value := strings.TrimSpace(values[i])
+				number, err := strconv.ParseFloat(value, 64)
+				if err != nil {
+					return fmt.Errorf("invalid numeric value %q for series %d", values[i], r.SeriesIndex)
+				}
+				updates = append(updates, CellUpdate{
+					WorkbookPath: dep.WorkbookPath,
+					Sheet:        r.Sheet,
+					Cell:         cell,
+					Value:        Num(number),
+				})
+			}
+		}
+	}
+
+	if len(updates) == 0 {
+		return fmt.Errorf("no chart ranges matched")
+	}
+
+	if err := d.SetWorkbookCells(updates); err != nil {
+		return err
+	}
+	if d.opts.Chart.CacheSync {
+		return d.SyncChartCaches()
+	}
 	return nil
 }
 
@@ -456,6 +579,40 @@ func (d *Document) Alerts() []Alert {
 	return out
 }
 
+func (d *Document) HasAlerts() bool {
+	if d == nil {
+		return false
+	}
+	return len(d.alerts) > 0
+}
+
+func (d *Document) AlertsByCode(code string) []Alert {
+	if d == nil || code == "" {
+		return []Alert{}
+	}
+
+	filtered := make([]Alert, 0)
+	for _, alert := range d.alerts {
+		if alert.Code != code {
+			continue
+		}
+		copyAlert := alert
+		if alert.Context != nil {
+			ctxCopy := make(map[string]string, len(alert.Context))
+			for key, value := range alert.Context {
+				ctxCopy[key] = value
+			}
+			copyAlert.Context = ctxCopy
+		}
+		filtered = append(filtered, copyAlert)
+	}
+
+	if len(filtered) == 0 {
+		return []Alert{}
+	}
+	return filtered
+}
+
 func (d *Document) addAlert(alert Alert) {
 	if d == nil {
 		return
@@ -469,6 +626,30 @@ func WithLogger(logger Logger) Option {
 			return
 		}
 		d.logger = logger
+	}
+}
+
+// WithOptions replaces the document options. Use DefaultOptions() as a base.
+func WithOptions(opts Options) Option {
+	return func(d *Document) {
+		if d == nil {
+			return
+		}
+		d.opts = opts
+	}
+}
+
+// Deprecated: use WithOptions(DefaultOptions()) with Mode set to BestEffort.
+func WithBestEffort(bestEffort bool) Option {
+	return func(d *Document) {
+		if d == nil {
+			return
+		}
+		if bestEffort {
+			d.opts.Mode = BestEffort
+		} else {
+			d.opts.Mode = Strict
+		}
 	}
 }
 
@@ -487,7 +668,7 @@ func WithErrorMode(mode ErrorMode) Option {
 		if d == nil {
 			return
 		}
-		d.errMode = mode
+		d.opts.Mode = mode
 	}
 }
 
@@ -502,7 +683,7 @@ func validateCellValue(value CellValue) error {
 }
 
 func (d *Document) handleWorkbookUpdateError(update CellUpdate, err error) error {
-	if d.errMode != BestEffort {
+	if d.opts.Mode != BestEffort {
 		return err
 	}
 
@@ -552,7 +733,7 @@ func toCacheDeps(dep ChartDependencies) (chartcache.Dependencies, error) {
 }
 
 func (d *Document) handleChartCacheError(dep ChartDependencies, err error) error {
-	if d.errMode != BestEffort {
+	if d.opts.Mode != BestEffort {
 		return err
 	}
 
@@ -569,6 +750,70 @@ func (d *Document) handleChartCacheError(dep ChartDependencies, err error) error
 	})
 
 	return nil
+}
+
+func expandRangeCells(startCell, endCell string) ([]string, error) {
+	startCol, startRow, startRef, err := xlref.SplitCellRef(startCell)
+	if err != nil {
+		return nil, fmt.Errorf("invalid start cell %q: %w", startCell, err)
+	}
+	endCol, endRow, endRef, err := xlref.SplitCellRef(endCell)
+	if err != nil {
+		return nil, fmt.Errorf("invalid end cell %q: %w", endCell, err)
+	}
+
+	if startCol != endCol && startRow != endRow {
+		return nil, fmt.Errorf("2D range %s:%s not supported", startRef, endRef)
+	}
+
+	if startCol == endCol {
+		if startRow > endRow {
+			startRow, endRow = endRow, startRow
+		}
+		out := make([]string, 0, endRow-startRow+1)
+		for row := startRow; row <= endRow; row++ {
+			out = append(out, fmt.Sprintf("%s%d", startCol, row))
+		}
+		return out, nil
+	}
+
+	startIdx := colToIndex(startCol)
+	endIdx := colToIndex(endCol)
+	if startIdx > endIdx {
+		startIdx, endIdx = endIdx, startIdx
+	}
+	out := make([]string, 0, endIdx-startIdx+1)
+	for col := startIdx; col <= endIdx; col++ {
+		out = append(out, fmt.Sprintf("%s%d", indexToCol(col), startRow))
+	}
+	return out, nil
+}
+
+func colToIndex(col string) int {
+	index := 0
+	for i := 0; i < len(col); i++ {
+		ch := col[i]
+		if ch < 'A' || ch > 'Z' {
+			return 0
+		}
+		index = index*26 + int(ch-'A'+1)
+	}
+	return index
+}
+
+func indexToCol(index int) string {
+	if index <= 0 {
+		return ""
+	}
+	var buf [8]byte
+	pos := len(buf)
+	for index > 0 {
+		index--
+		buf[pos-1] = byte('A' + (index % 26))
+		pos--
+		index /= 26
+	}
+	return string(buf[pos:])
 }
 
 type noopLogger struct{}

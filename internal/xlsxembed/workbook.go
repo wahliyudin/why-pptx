@@ -22,6 +22,13 @@ type CellValue struct {
 	String *string
 }
 
+type MissingNumericPolicy int
+
+const (
+	MissingNumericEmpty MissingNumericPolicy = iota
+	MissingNumericZero
+)
+
 type Workbook struct {
 	data    []byte
 	reader  *zip.Reader
@@ -142,7 +149,7 @@ func (wb *Workbook) Save() ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
-func (wb *Workbook) GetRangeValues(sheetName, startCell, endCell string) ([]string, error) {
+func (wb *Workbook) GetRangeValues(sheetName, startCell, endCell string, policy MissingNumericPolicy) ([]string, error) {
 	if wb == nil || wb.reader == nil {
 		return nil, fmt.Errorf("workbook not initialized")
 	}
@@ -196,7 +203,7 @@ func (wb *Workbook) GetRangeValues(sheetName, startCell, endCell string) ([]stri
 		return nil, fmt.Errorf("read sheet %q: %w", sheetPath, err)
 	}
 
-	values, err := readCellValues(data, targets)
+	values, err := readCellValues(data, targets, policy)
 	if err != nil {
 		return nil, err
 	}
@@ -570,7 +577,7 @@ func writeUpdatedCell(decoder *xml.Decoder, encoder *xml.Encoder, start xml.Star
 	return nil
 }
 
-func readCellValues(data []byte, targets map[string]struct{}) (map[string]string, error) {
+func readCellValues(data []byte, targets map[string]struct{}, policy MissingNumericPolicy) (map[string]string, error) {
 	decoder := xml.NewDecoder(bytes.NewReader(data))
 	values := make(map[string]string, len(targets))
 
@@ -652,7 +659,11 @@ func readCellValues(data []byte, targets map[string]struct{}) (map[string]string
 
 	for ref := range targets {
 		if _, ok := values[ref]; !ok {
-			values[ref] = ""
+			if policy == MissingNumericZero {
+				values[ref] = "0"
+			} else {
+				values[ref] = ""
+			}
 		}
 	}
 

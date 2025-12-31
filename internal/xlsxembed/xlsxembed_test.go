@@ -165,7 +165,7 @@ func TestGetRangeValuesColumn(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 
-	values, err := wb.GetRangeValues("Sheet1", "A1", "A2")
+	values, err := wb.GetRangeValues("Sheet1", "A1", "A2", MissingNumericEmpty)
 	if err != nil {
 		t.Fatalf("GetRangeValues: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestGetRangeValuesRow(t *testing.T) {
 		t.Fatalf("Open updated: %v", err)
 	}
 
-	values, err := wb.GetRangeValues("Sheet1", "A1", "B1")
+	values, err := wb.GetRangeValues("Sheet1", "A1", "B1", MissingNumericEmpty)
 	if err != nil {
 		t.Fatalf("GetRangeValues: %v", err)
 	}
@@ -205,6 +205,25 @@ func TestGetRangeValuesRow(t *testing.T) {
 		t.Fatalf("expected 2 values, got %d", len(values))
 	}
 	if values[0] != "1" || values[1] != "hello" {
+		t.Fatalf("unexpected values: %#v", values)
+	}
+}
+
+func TestGetRangeValuesMissingNumericZero(t *testing.T) {
+	data := buildTestXLSX(t)
+	wb, err := Open(data)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	values, err := wb.GetRangeValues("Sheet1", "A1", "A2", MissingNumericZero)
+	if err != nil {
+		t.Fatalf("GetRangeValues: %v", err)
+	}
+	if len(values) != 2 {
+		t.Fatalf("expected 2 values, got %d", len(values))
+	}
+	if values[0] != "1" || values[1] != "0" {
 		t.Fatalf("unexpected values: %#v", values)
 	}
 }

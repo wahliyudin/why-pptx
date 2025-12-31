@@ -28,7 +28,7 @@ type Dependencies struct {
 	Ranges    []Range
 }
 
-type ValueProvider func(sheet, start, end string) ([]string, error)
+type ValueProvider func(kind RangeKind, sheet, start, end string) ([]string, error)
 
 func SyncCaches(chartXML []byte, deps Dependencies, provider ValueProvider) ([]byte, error) {
 	if deps.ChartType != "bar" && deps.ChartType != "line" {
@@ -219,7 +219,7 @@ func buildSeriesData(deps Dependencies, provider ValueProvider) (map[int]*series
 		if r.SeriesIndex < 0 {
 			continue
 		}
-		values, err := provider(r.Sheet, r.StartCell, r.EndCell)
+		values, err := provider(r.Kind, r.Sheet, r.StartCell, r.EndCell)
 		if err != nil {
 			return nil, err
 		}

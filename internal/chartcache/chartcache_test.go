@@ -36,7 +36,7 @@ func TestSyncCachesUpdatesSeriesCaches(t *testing.T) {
 		},
 	}
 
-	provider := func(sheet, start, end string) ([]string, error) {
+	provider := func(kind RangeKind, sheet, start, end string) ([]string, error) {
 		key := sheet + "!" + start + ":" + end
 		switch key {
 		case "Sheet1!A2:A3":
@@ -91,7 +91,7 @@ func TestSyncCachesMissingRefErrors(t *testing.T) {
 		},
 	}
 
-	_, err := SyncCaches([]byte(xml), deps, func(_, _, _ string) ([]string, error) {
+	_, err := SyncCaches([]byte(xml), deps, func(_ RangeKind, _, _, _ string) ([]string, error) {
 		return []string{"A", "B"}, nil
 	})
 	if err == nil {
