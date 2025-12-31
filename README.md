@@ -38,6 +38,31 @@ if err := doc.SaveFile("out.pptx"); err != nil {
 }
 ```
 
+## ApplyChartData example
+
+```go
+opts := pptx.DefaultOptions()
+opts.Chart.CacheSync = false // skip cache sync for speed
+
+doc, err := pptx.OpenFile("in.pptx", pptx.WithOptions(opts))
+if err != nil {
+	// handle error
+}
+defer doc.Close()
+
+err = doc.ApplyChartData(0, map[string][]string{
+	"categories": {"Q1", "Q2"},
+	"values:0":   {"10", "20"},
+})
+if err != nil {
+	// handle error
+}
+
+if err := doc.SaveFile("out.pptx"); err != nil {
+	// handle error
+}
+```
+
 ## Options
 
 - `Options.Mode`: `Strict` (default) or `BestEffort`.
@@ -57,6 +82,22 @@ Alerts are recorded on `Document` in best-effort flows:
 ## Convenience API
 
 `ApplyChartData` lets you update categories and series values by chart index.
+
+## Migration (v0.2 -> v0.3)
+
+Before (v0.2):
+
+```go
+doc, err := pptx.OpenFile("in.pptx", pptx.WithBestEffort(true))
+```
+
+After (v0.3):
+
+```go
+opts := pptx.DefaultOptions()
+opts.Mode = pptx.BestEffort
+doc, err := pptx.OpenFile("in.pptx", pptx.WithOptions(opts))
+```
 
 ## Deprecated options
 

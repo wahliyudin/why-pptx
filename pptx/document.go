@@ -117,6 +117,8 @@ const (
 	BestEffort
 )
 
+// DefaultOptions returns stable defaults for production use:
+// Mode=Strict, Chart.CacheSync=true, Workbook.MissingNumericPolicy=MissingNumericEmpty.
 func DefaultOptions() Options {
 	return Options{
 		Mode:  Strict,
@@ -487,13 +489,29 @@ func (d *Document) ApplyChartData(chartIndex int, data map[string][]string) erro
 	}
 
 	dep := deps[chartIndex]
+	categories, hasCategories := data["categories"]
+	if hasCategories {
+		categoriesLen := len(categories)
+		for _, r := range dep.Ranges {
+			if r.Kind != RangeValues {
+				continue
+			}
+			key := fmt.Sprintf("values:%d", r.SeriesIndex)
+			values, ok := data[key]
+			if !ok {
+				continue
+			}
+			if len(values) != categoriesLen {
+				return d.handleChartDataMismatch(chartIndex, categoriesLen, len(values), r.SeriesIndex)
+			}
+		}
+	}
 	updates := make([]CellUpdate, 0)
 
 	for _, r := range dep.Ranges {
 		switch r.Kind {
 		case RangeCategories:
-			categories, ok := data["categories"]
-			if !ok {
+			if !hasCategories {
 				return fmt.Errorf("categories data is required")
 			}
 			cells, err := expandRangeCells(r.StartCell, r.EndCell)
@@ -639,7 +657,7 @@ func WithOptions(opts Options) Option {
 	}
 }
 
-// Deprecated: use WithOptions(DefaultOptions()) with Mode set to BestEffort.
+// Deprecated: use WithOptions and Options.Mode instead.
 func WithBestEffort(bestEffort bool) Option {
 	return func(d *Document) {
 		if d == nil {
@@ -746,6 +764,26 @@ func (d *Document) handleChartCacheError(dep ChartDependencies, err error) error
 			"chart":    dep.ChartPath,
 			"workbook": dep.WorkbookPath,
 			"error":    err.Error(),
+		},
+	})
+
+	return nil
+}
+
+func (d *Document) handleChartDataMismatch(chartIndex, categoriesLen, valuesLen, seriesIndex int) error {
+	if d.opts.Mode != BestEffort {
+		return fmt.Errorf("categories length %d does not match values length %d for series %d", categoriesLen, valuesLen, seriesIndex)
+	}
+
+	d.addAlert(Alert{
+		Level:   "warn",
+		Code:    "CHART_DATA_LENGTH_MISMATCH",
+		Message: "Categories and values length mismatch; chart skipped",
+		Context: map[string]string{
+			"chartIndex":    strconv.Itoa(chartIndex),
+			"categoriesLen": strconv.Itoa(categoriesLen),
+			"valuesLen":     strconv.Itoa(valuesLen),
+			"seriesIndex":   strconv.Itoa(seriesIndex),
 		},
 	})
 
