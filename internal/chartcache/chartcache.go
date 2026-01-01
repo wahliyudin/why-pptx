@@ -31,7 +31,7 @@ type Dependencies struct {
 type ValueProvider func(kind RangeKind, sheet, start, end string) ([]string, error)
 
 func SyncCaches(chartXML []byte, deps Dependencies, provider ValueProvider) ([]byte, error) {
-	if deps.ChartType != "bar" && deps.ChartType != "line" {
+	if deps.ChartType != "bar" && deps.ChartType != "line" && deps.ChartType != "pie" {
 		return nil, fmt.Errorf("unsupported chart type %q", deps.ChartType)
 	}
 
@@ -40,9 +40,24 @@ func SyncCaches(chartXML []byte, deps Dependencies, provider ValueProvider) ([]b
 		return nil, err
 	}
 
+	if deps.ChartType == "pie" {
+		if len(seriesData) != 1 {
+			return nil, fmt.Errorf("pie chart requires exactly one series")
+		}
+		entry, ok := seriesData[0]
+		if !ok {
+			return nil, fmt.Errorf("pie chart series index must be 0")
+		}
+		if entry.categories == nil || entry.values == nil {
+			return nil, fmt.Errorf("pie chart requires categories and values")
+		}
+	}
+
 	targetChart := "barChart"
 	if deps.ChartType == "line" {
 		targetChart = "lineChart"
+	} else if deps.ChartType == "pie" {
+		targetChart = "pieChart"
 	}
 
 	decoder := xml.NewDecoder(bytes.NewReader(chartXML))
@@ -55,6 +70,7 @@ func SyncCaches(chartXML []byte, deps Dependencies, provider ValueProvider) ([]b
 	chartNS := ""
 
 	currentSeries := -1
+	seriesTotal := 0
 	seriesSeen := make(map[int]bool)
 
 	catDepth := 0
@@ -85,6 +101,7 @@ func SyncCaches(chartXML []byte, deps Dependencies, provider ValueProvider) ([]b
 			}
 			if inTarget && tok.Name.Local == "ser" {
 				currentSeries++
+				seriesTotal++
 				seriesSeen[currentSeries] = true
 			}
 			if inTarget && currentSeries >= 0 {
@@ -187,6 +204,9 @@ func SyncCaches(chartXML []byte, deps Dependencies, provider ValueProvider) ([]b
 	}
 	if !foundTarget {
 		return nil, fmt.Errorf("chart type %q not found", deps.ChartType)
+	}
+	if deps.ChartType == "pie" && seriesTotal > 1 {
+		return nil, fmt.Errorf("pie chart requires exactly one series")
 	}
 
 	for index := range seriesData {

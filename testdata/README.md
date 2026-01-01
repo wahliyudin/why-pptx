@@ -8,6 +8,10 @@ Fixtures under `testdata/pptx/` are minimal PPTX ZIPs used for structural regres
 - `pie_simple_embedded.pptx`: Single slide with a pie chart and one series; embedded workbook with categories and values.
 - `area_simple_embedded.pptx`: Single slide with an area chart and one series; embedded workbook with categories and values.
 - `pie_linked_workbook.pptx`: Pie chart points to an external workbook; should be skipped with an alert.
+- `pie_edit_valid.pptx`: Single-series pie chart with embedded workbook; used for write-path edits.
+- `pie_edit_multiple_series.pptx`: Pie chart with multiple series; used to validate write-path rejection.
+- `pie_edit_linked_workbook.pptx`: Pie chart with linked workbook; must be skipped with an alert.
+- `pie_edit_cache_invalid.pptx`: Pie chart with invalid cache (ptCount/idx); used for postflight rejection.
 - `malformed_chart_cache.pptx`: Chart cache has invalid ptCount/pt entries; postflight cache validation should fail.
 - `shared_workbook_two_charts.pptx`: Two charts share one embedded workbook; used to verify per-chart staging and partial success.
 - `xlsx_sharedStrings_present.pptx`: Embedded workbook contains `xl/sharedStrings.xml` and a `t="s"` cell; should fail postflight validation.

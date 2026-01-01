@@ -497,6 +497,13 @@ func (d *Document) SyncChartCaches() error {
 	}
 
 	for _, dep := range deps {
+		if err := d.validateWritableChart(dep); err != nil {
+			if d.opts.Mode == BestEffort {
+				continue
+			}
+			return err
+		}
+
 		ctx := d.validateContext(dep)
 		err := d.withChartStage(ctx, func(stage overlaystage.Overlay) error {
 			return d.syncChartCacheInOverlay(stage, dep)
@@ -532,6 +539,9 @@ func (d *Document) ApplyChartData(chartIndex int, data map[string][]string) erro
 	}
 
 	dep := deps[chartIndex]
+	if err := d.validateWritableChart(dep); err != nil {
+		return err
+	}
 	categories, hasCategories := data["categories"]
 	if hasCategories {
 		categoriesLen := len(categories)
@@ -922,6 +932,98 @@ func (d *Document) handleChartCacheError(dep ChartDependencies, err error) error
 	})
 
 	return nil
+}
+
+func (d *Document) validateWritableChart(dep ChartDependencies) error {
+	if dep.ChartType == "mixed" || (dep.ChartType != "bar" && dep.ChartType != "line" && dep.ChartType != "pie") {
+		return d.handleChartTypeUnsupported(dep)
+	}
+	if dep.ChartType == "pie" {
+		if code, err := validatePieDependencies(dep); err != nil {
+			return d.handlePieWriteError(dep, code, err)
+		}
+	}
+	return nil
+}
+
+func (d *Document) handleChartTypeUnsupported(dep ChartDependencies) error {
+	err := fmt.Errorf("unsupported chart type %q", dep.ChartType)
+	if d.opts.Mode != BestEffort {
+		return err
+	}
+
+	d.addAlert(Alert{
+		Level:   "warn",
+		Code:    "CHART_TYPE_UNSUPPORTED",
+		Message: "Chart type is unsupported; chart is skipped",
+		Context: map[string]string{
+			"slide":     dep.SlidePath,
+			"chart":     dep.ChartPath,
+			"chartType": dep.ChartType,
+		},
+	})
+
+	return err
+}
+
+func (d *Document) handlePieWriteError(dep ChartDependencies, code string, err error) error {
+	if d.opts.Mode != BestEffort {
+		return err
+	}
+
+	message := "Pie chart is unsupported; chart is skipped"
+	if code == "WRITE_PIE_MULTIPLE_SERIES_UNSUPPORTED" {
+		message = "Pie charts with multiple series are unsupported; chart is skipped"
+	} else if code == "CHART_DEPENDENCIES_PARSE_FAILED" {
+		message = "Failed to extract chart dependencies; chart is skipped"
+	}
+
+	d.addAlert(Alert{
+		Level:   "warn",
+		Code:    code,
+		Message: message,
+		Context: map[string]string{
+			"slide":    dep.SlidePath,
+			"chart":    dep.ChartPath,
+			"workbook": dep.WorkbookPath,
+			"error":    err.Error(),
+		},
+	})
+
+	return err
+}
+
+func validatePieDependencies(dep ChartDependencies) (string, error) {
+	valueSeries := make(map[int]struct{})
+	catSeries := make(map[int]struct{})
+
+	for _, r := range dep.Ranges {
+		switch r.Kind {
+		case RangeValues:
+			valueSeries[r.SeriesIndex] = struct{}{}
+		case RangeCategories:
+			catSeries[r.SeriesIndex] = struct{}{}
+		}
+	}
+
+	if len(valueSeries) == 0 || len(catSeries) == 0 {
+		return "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("pie chart requires categories and values")
+	}
+	if len(valueSeries) > 1 || len(catSeries) > 1 {
+		return "WRITE_PIE_MULTIPLE_SERIES_UNSUPPORTED", fmt.Errorf("pie chart requires exactly one series")
+	}
+
+	seriesIndex := -1
+	for idx := range valueSeries {
+		seriesIndex = idx
+	}
+	for idx := range catSeries {
+		if idx != seriesIndex {
+			return "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("pie chart categories/values series mismatch")
+		}
+	}
+
+	return "", nil
 }
 
 func (d *Document) handleChartDataMismatch(chartIndex, categoriesLen, valuesLen, seriesIndex int) error {

@@ -32,6 +32,11 @@ flows; Strict mode generally returns errors instead of recording alerts.
 - WORKBOOK_UPDATE_FAILED: workbook cell update failed; workbook is skipped.
   Context: workbook, sheet, cell, error
 
+## Write support
+
+- WRITE_PIE_MULTIPLE_SERIES_UNSUPPORTED: pie chart has multiple series; chart is skipped.
+  Context: slide, chart, workbook, error
+
 ## Cache sync
 
 - CHART_CACHE_SYNC_FAILED: chart cache sync failed; chart is skipped.
