@@ -10,6 +10,7 @@ import (
 	"why-pptx/internal/chartdiscover"
 	"why-pptx/internal/chartxml"
 	"why-pptx/internal/ooxmlpkg"
+	"why-pptx/internal/overlaystage"
 	"why-pptx/internal/xlref"
 	"why-pptx/internal/xlsxembed"
 )
@@ -31,11 +32,12 @@ type Logger interface {
 type Option func(*Document)
 
 type Document struct {
-	pkg    *ooxmlpkg.Package
-	alerts []Alert
-	logger Logger
-	strict bool
-	opts   Options
+	pkg     *ooxmlpkg.Package
+	overlay overlaystage.Overlay
+	alerts  []Alert
+	logger  Logger
+	strict  bool
+	opts    Options
 }
 
 type EmbeddedChart struct {
@@ -135,10 +137,16 @@ func OpenFile(path string, opts ...Option) (*Document, error) {
 		return nil, err
 	}
 
+	overlay, err := overlaystage.NewPackageOverlay(pkg)
+	if err != nil {
+		return nil, err
+	}
+
 	doc := &Document{
-		pkg:    pkg,
-		logger: noopLogger{},
-		opts:   DefaultOptions(),
+		pkg:     pkg,
+		overlay: overlay,
+		logger:  noopLogger{},
+		opts:    DefaultOptions(),
 	}
 	for _, opt := range opts {
 		if opt != nil {
@@ -688,6 +696,30 @@ func WithErrorMode(mode ErrorMode) Option {
 		}
 		d.opts.Mode = mode
 	}
+}
+
+func (d *Document) withChartStage(chartPath string, fn func(stage overlaystage.Overlay) error) error {
+	if d == nil || d.pkg == nil {
+		return fmt.Errorf("document not initialized")
+	}
+	if d.overlay == nil {
+		overlay, err := overlaystage.NewPackageOverlay(d.pkg)
+		if err != nil {
+			return err
+		}
+		d.overlay = overlay
+	}
+
+	stage := overlaystage.NewStagingOverlay(d.overlay)
+	if err := fn(stage); err != nil {
+		stage.Discard()
+		return err
+	}
+	if err := stage.Commit(); err != nil {
+		stage.Discard()
+		return err
+	}
+	return nil
 }
 
 func validateCellValue(value CellValue) error {
