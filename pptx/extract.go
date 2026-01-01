@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"why-pptx/internal/chartdiscover"
+	"why-pptx/internal/chartxml"
+	"why-pptx/internal/xlref"
 	"why-pptx/internal/xlsxembed"
 )
 
@@ -24,6 +26,10 @@ type ExtractedSeries struct {
 	Index int      `json:"index"`
 	Name  string   `json:"name"`
 	Data  []string `json:"data"`
+	// PlotType is set for mixed charts (e.g., "bar" or "line").
+	PlotType string `json:"plotType,omitempty"`
+	// Axis is set for mixed charts when a secondary axis is detected.
+	Axis string `json:"axis,omitempty"`
 }
 
 type ExtractMeta struct {
@@ -48,6 +54,13 @@ type ExportedPayload struct {
 type Exporter interface {
 	Format() ExportFormat
 	Export(in ExtractedChartData) (ExportedPayload, error)
+}
+
+type mixedSeriesRanges struct {
+	series     chartxml.MixedSeries
+	categories *ChartRange
+	values     *ChartRange
+	name       *ChartRange
 }
 
 func (d *Document) ExtractChartDataByPath(chartPath string) (ExtractedChartData, error) {
@@ -265,6 +278,39 @@ func (d *Document) exporterForFormat(format ExportFormat) (Exporter, error) {
 }
 
 func (d *Document) extractChartData(chart chartdiscover.EmbeddedChart) (ExtractedChartData, error) {
+	chartXML, err := d.pkg.ReadPart(chart.ChartPath)
+	if err != nil {
+		return ExtractedChartData{}, d.handleExtractError(extractIssue{
+			code:    "CHART_DEPENDENCIES_PARSE_FAILED",
+			message: extractMessageForCode("CHART_DEPENDENCIES_PARSE_FAILED"),
+			err:     fmt.Errorf("read chart %q: %w", chart.ChartPath, err),
+			context: map[string]string{
+				"chart":    chart.ChartPath,
+				"slide":    chart.SlidePath,
+				"workbook": chart.WorkbookPath,
+				"error":    err.Error(),
+			},
+		})
+	}
+
+	info, err := chartxml.ParseInfo(bytes.NewReader(chartXML))
+	if err != nil {
+		return ExtractedChartData{}, d.handleExtractError(extractIssue{
+			code:    "CHART_DEPENDENCIES_PARSE_FAILED",
+			message: extractMessageForCode("CHART_DEPENDENCIES_PARSE_FAILED"),
+			err:     err,
+			context: map[string]string{
+				"chart":    chart.ChartPath,
+				"slide":    chart.SlidePath,
+				"workbook": chart.WorkbookPath,
+				"error":    err.Error(),
+			},
+		})
+	}
+	if info.ChartType == "mixed" {
+		return d.extractMixedChartData(chart, chartXML)
+	}
+
 	deps, err := d.extractChartDependencies(EmbeddedChart{
 		SlidePath:    chart.SlidePath,
 		ChartPath:    chart.ChartPath,
@@ -445,6 +491,289 @@ func (d *Document) extractChartData(chart chartdiscover.EmbeddedChart) (Extracte
 	}, nil
 }
 
+func (d *Document) extractMixedChartData(chart chartdiscover.EmbeddedChart, chartXML []byte) (ExtractedChartData, error) {
+	parsed, err := chartxml.ParseMixed(bytes.NewReader(chartXML))
+	if err != nil {
+		return ExtractedChartData{}, d.handleExtractError(extractIssue{
+			code:    "EXTRACT_MIXED_CHART_DETECTED",
+			message: extractMessageForCode("EXTRACT_MIXED_CHART_DETECTED"),
+			err:     err,
+			context: map[string]string{
+				"chart":    chart.ChartPath,
+				"slide":    chart.SlidePath,
+				"workbook": chart.WorkbookPath,
+				"error":    err.Error(),
+			},
+		})
+	}
+	if len(parsed.Series) == 0 {
+		return ExtractedChartData{}, d.handleExtractError(extractIssue{
+			code:    "EXTRACT_MIXED_CHART_DETECTED",
+			message: extractMessageForCode("EXTRACT_MIXED_CHART_DETECTED"),
+			err:     fmt.Errorf("mixed chart has no series"),
+			context: map[string]string{
+				"chart":    chart.ChartPath,
+				"slide":    chart.SlidePath,
+				"workbook": chart.WorkbookPath,
+			},
+		})
+	}
+
+	seriesRanges := make(map[int]*mixedSeriesRanges, len(parsed.Series))
+	for _, series := range parsed.Series {
+		seriesRanges[series.Index] = &mixedSeriesRanges{series: series}
+		for _, formula := range series.Formulas {
+			ref, err := xlref.ParseA1Range(formula.Formula)
+			if err != nil {
+				return ExtractedChartData{}, d.handleExtractError(extractIssue{
+					code:    "CHART_DEPENDENCIES_PARSE_FAILED",
+					message: extractMessageForCode("CHART_DEPENDENCIES_PARSE_FAILED"),
+					err:     err,
+					context: map[string]string{
+						"chart":    chart.ChartPath,
+						"slide":    chart.SlidePath,
+						"workbook": chart.WorkbookPath,
+						"error":    err.Error(),
+					},
+				})
+			}
+
+			r := ChartRange{
+				Kind:        ChartRangeKind(formula.Kind),
+				SeriesIndex: series.Index,
+				Sheet:       ref.Sheet,
+				StartCell:   ref.StartCell,
+				EndCell:     ref.EndCell,
+				Formula:     formula.Formula,
+			}
+			entry := seriesRanges[series.Index]
+			switch r.Kind {
+			case RangeCategories:
+				if entry.categories != nil {
+					return ExtractedChartData{}, d.handleExtractError(extractIssue{
+						code:    "CHART_DEPENDENCIES_PARSE_FAILED",
+						message: extractMessageForCode("CHART_DEPENDENCIES_PARSE_FAILED"),
+						err:     fmt.Errorf("duplicate categories range for series %d", series.Index),
+						context: map[string]string{
+							"chart":    chart.ChartPath,
+							"slide":    chart.SlidePath,
+							"workbook": chart.WorkbookPath,
+						},
+					})
+				}
+				entry.categories = &r
+			case RangeValues:
+				if entry.values != nil {
+					return ExtractedChartData{}, d.handleExtractError(extractIssue{
+						code:    "CHART_DEPENDENCIES_PARSE_FAILED",
+						message: extractMessageForCode("CHART_DEPENDENCIES_PARSE_FAILED"),
+						err:     fmt.Errorf("duplicate values range for series %d", series.Index),
+						context: map[string]string{
+							"chart":    chart.ChartPath,
+							"slide":    chart.SlidePath,
+							"workbook": chart.WorkbookPath,
+						},
+					})
+				}
+				entry.values = &r
+			case RangeSeriesName:
+				if entry.name != nil {
+					return ExtractedChartData{}, d.handleExtractError(extractIssue{
+						code:    "CHART_DEPENDENCIES_PARSE_FAILED",
+						message: extractMessageForCode("CHART_DEPENDENCIES_PARSE_FAILED"),
+						err:     fmt.Errorf("duplicate series name range for series %d", series.Index),
+						context: map[string]string{
+							"chart":    chart.ChartPath,
+							"slide":    chart.SlidePath,
+							"workbook": chart.WorkbookPath,
+						},
+					})
+				}
+				entry.name = &r
+			}
+		}
+	}
+
+	var catKey string
+	for _, entry := range seriesRanges {
+		if entry.categories == nil || entry.values == nil {
+			return ExtractedChartData{}, d.handleExtractError(extractIssue{
+				code:    "CHART_DEPENDENCIES_PARSE_FAILED",
+				message: extractMessageForCode("CHART_DEPENDENCIES_PARSE_FAILED"),
+				err:     fmt.Errorf("mixed chart requires categories and values for each series"),
+				context: map[string]string{
+					"chart":    chart.ChartPath,
+					"slide":    chart.SlidePath,
+					"workbook": chart.WorkbookPath,
+				},
+			})
+		}
+		key := entry.categories.Sheet + "!" + entry.categories.StartCell + ":" + entry.categories.EndCell
+		if catKey == "" {
+			catKey = key
+		} else if key != catKey {
+			return ExtractedChartData{}, d.handleExtractError(extractIssue{
+				code:    "CHART_DEPENDENCIES_PARSE_FAILED",
+				message: extractMessageForCode("CHART_DEPENDENCIES_PARSE_FAILED"),
+				err:     fmt.Errorf("mixed chart categories must match across series"),
+				context: map[string]string{
+					"chart":    chart.ChartPath,
+					"slide":    chart.SlidePath,
+					"workbook": chart.WorkbookPath,
+				},
+			})
+		}
+
+		if _, err := expandRangeCells(entry.categories.StartCell, entry.categories.EndCell); err != nil {
+			return ExtractedChartData{}, d.handleExtractError(extractIssue{
+				code:    "EXTRACT_INVALID_RANGE",
+				message: extractMessageForCode("EXTRACT_INVALID_RANGE"),
+				err:     err,
+				context: map[string]string{
+					"chart":    chart.ChartPath,
+					"slide":    chart.SlidePath,
+					"workbook": chart.WorkbookPath,
+					"error":    err.Error(),
+				},
+			})
+		}
+		if _, err := expandRangeCells(entry.values.StartCell, entry.values.EndCell); err != nil {
+			return ExtractedChartData{}, d.handleExtractError(extractIssue{
+				code:    "EXTRACT_INVALID_RANGE",
+				message: extractMessageForCode("EXTRACT_INVALID_RANGE"),
+				err:     err,
+				context: map[string]string{
+					"chart":    chart.ChartPath,
+					"slide":    chart.SlidePath,
+					"workbook": chart.WorkbookPath,
+					"error":    err.Error(),
+				},
+			})
+		}
+	}
+
+	wbBytes, err := d.pkg.ReadPart(chart.WorkbookPath)
+	if err != nil {
+		return ExtractedChartData{}, d.handleExtractError(extractIssue{
+			code:    "EXTRACT_CELL_PARSE_ERROR",
+			message: extractMessageForCode("EXTRACT_CELL_PARSE_ERROR"),
+			err:     fmt.Errorf("read workbook %q: %w", chart.WorkbookPath, err),
+			context: map[string]string{
+				"chart":    chart.ChartPath,
+				"slide":    chart.SlidePath,
+				"workbook": chart.WorkbookPath,
+				"error":    err.Error(),
+			},
+		})
+	}
+
+	sharedFound, sheetPath, cellRef, err := detectSharedStrings(wbBytes)
+	if err != nil {
+		return ExtractedChartData{}, d.handleExtractError(extractIssue{
+			code:    "EXTRACT_CELL_PARSE_ERROR",
+			message: extractMessageForCode("EXTRACT_CELL_PARSE_ERROR"),
+			err:     err,
+			context: map[string]string{
+				"chart":    chart.ChartPath,
+				"slide":    chart.SlidePath,
+				"workbook": chart.WorkbookPath,
+				"error":    err.Error(),
+			},
+		})
+	}
+	if sharedFound {
+		ctx := map[string]string{
+			"chart":    chart.ChartPath,
+			"slide":    chart.SlidePath,
+			"workbook": chart.WorkbookPath,
+		}
+		if sheetPath != "" {
+			ctx["sheetPath"] = sheetPath
+		}
+		if cellRef != "" {
+			ctx["cell"] = cellRef
+		}
+		return ExtractedChartData{}, d.handleExtractError(extractIssue{
+			code:    "EXTRACT_SHAREDSTRINGS_UNSUPPORTED",
+			message: extractMessageForCode("EXTRACT_SHAREDSTRINGS_UNSUPPORTED"),
+			err:     fmt.Errorf("sharedStrings not supported"),
+			context: ctx,
+		})
+	}
+
+	wb, err := xlsxembed.Open(wbBytes)
+	if err != nil {
+		return ExtractedChartData{}, d.handleExtractError(extractIssue{
+			code:    "EXTRACT_CELL_PARSE_ERROR",
+			message: extractMessageForCode("EXTRACT_CELL_PARSE_ERROR"),
+			err:     err,
+			context: map[string]string{
+				"chart":    chart.ChartPath,
+				"slide":    chart.SlidePath,
+				"workbook": chart.WorkbookPath,
+				"error":    err.Error(),
+			},
+		})
+	}
+
+	seriesKeys := make([]int, 0, len(seriesRanges))
+	for idx := range seriesRanges {
+		seriesKeys = append(seriesKeys, idx)
+	}
+	sort.Ints(seriesKeys)
+
+	catRange := seriesRanges[seriesKeys[0]].categories
+	labels, err := wb.GetRangeValues(catRange.Sheet, catRange.StartCell, catRange.EndCell, xlsxembed.MissingNumericEmpty)
+	if err != nil {
+		return ExtractedChartData{}, d.handleWorkbookRangeError(chart, catRange.Sheet, err)
+	}
+
+	series := make([]ExtractedSeries, 0, len(seriesKeys))
+	for _, idx := range seriesKeys {
+		entry := seriesRanges[idx]
+		values, err := wb.GetRangeValues(entry.values.Sheet, entry.values.StartCell, entry.values.EndCell, xlsxembed.MissingNumericEmpty)
+		if err != nil {
+			return ExtractedChartData{}, d.handleWorkbookRangeError(chart, entry.values.Sheet, err)
+		}
+
+		name := fmt.Sprintf("Series %d", idx+1)
+		if entry.name != nil {
+			names, err := wb.GetRangeValues(entry.name.Sheet, entry.name.StartCell, entry.name.EndCell, xlsxembed.MissingNumericEmpty)
+			if err != nil {
+				return ExtractedChartData{}, d.handleWorkbookRangeError(chart, entry.name.Sheet, err)
+			}
+			if len(names) > 0 {
+				trimmed := strings.TrimSpace(names[0])
+				if trimmed != "" {
+					name = trimmed
+				}
+			}
+		}
+
+		series = append(series, ExtractedSeries{
+			Index:    idx,
+			Name:     name,
+			Data:     values,
+			PlotType: entry.series.PlotType,
+			Axis:     entry.series.Axis,
+		})
+	}
+
+	meta := ExtractMeta{
+		ChartPath:    chart.ChartPath,
+		SlidePath:    chart.SlidePath,
+		WorkbookPath: chart.WorkbookPath,
+		Sheet:        catRange.Sheet,
+	}
+
+	return ExtractedChartData{
+		Type:   "mixed",
+		Labels: labels,
+		Series: series,
+		Meta:   meta,
+	}, nil
+}
+
 func (d *Document) handleWorkbookRangeError(chart chartdiscover.EmbeddedChart, sheet string, err error) error {
 	code := "EXTRACT_CELL_PARSE_ERROR"
 	if strings.Contains(err.Error(), "sheet") && strings.Contains(err.Error(), "not found") {
@@ -618,6 +947,8 @@ func extractMessageForCode(code string) string {
 		return "Workbook sheet not found"
 	case "EXTRACT_CELL_PARSE_ERROR":
 		return "Failed to parse workbook cells"
+	case "EXTRACT_MIXED_CHART_DETECTED":
+		return "Mixed chart type is unsupported; chart is skipped"
 	case "EXPORT_FORMAT_UNSUPPORTED":
 		return "Export format is not registered"
 	default:

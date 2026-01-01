@@ -23,3 +23,6 @@ Fixtures under `testdata/pptx/` are minimal PPTX ZIPs used for structural regres
 - `malformed_chart_cache.pptx`: Chart cache has invalid ptCount/pt entries; postflight cache validation should fail.
 - `shared_workbook_two_charts.pptx`: Two charts share one embedded workbook; used to verify per-chart staging and partial success.
 - `xlsx_sharedStrings_present.pptx`: Embedded workbook contains `xl/sharedStrings.xml` and a `t="s"` cell; should fail postflight validation.
+- `mix_bar_line_simple.pptx`: Mixed bar+line chart with shared categories; embedded workbook.
+- `mix_bar_line_secondary_axis.pptx`: Mixed bar+line chart with secondary axis IDs; used to validate axis detection.
+- `mix_unsupported_variant.pptx`: Mixed chart including an unsupported plot type; extraction should skip or error.

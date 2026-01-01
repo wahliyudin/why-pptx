@@ -136,3 +136,37 @@ func TestChartJSExporterArea(t *testing.T) {
 		t.Fatalf("expected fill=true for area dataset")
 	}
 }
+
+func TestChartJSExporterMixed(t *testing.T) {
+	exporter := ChartJSExporter{MissingNumericPolicy: MissingNumericEmpty}
+	input := ExtractedChartData{
+		Type:   "mixed",
+		Labels: []string{"A", "B"},
+		Series: []ExtractedSeries{{
+			Index:    0,
+			Name:     "Bars",
+			Data:     []string{"1", "2"},
+			PlotType: "bar",
+		}, {
+			Index:    1,
+			Name:     "Line",
+			Data:     []string{"3", "4"},
+			PlotType: "line",
+		}},
+	}
+
+	payload, err := exporter.Export(input)
+	if err != nil {
+		t.Fatalf("Export: %v", err)
+	}
+	if payload.Data["type"] != "bar" {
+		t.Fatalf("expected bar base type, got %#v", payload.Data["type"])
+	}
+	datasets := payload.Data["datasets"].([]map[string]any)
+	if len(datasets) != 2 {
+		t.Fatalf("expected 2 datasets, got %d", len(datasets))
+	}
+	if datasets[0]["type"] != "bar" || datasets[1]["type"] != "line" {
+		t.Fatalf("unexpected dataset types: %#v", datasets)
+	}
+}

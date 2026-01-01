@@ -1,0 +1,270 @@
+package chartxml
+
+import (
+	"encoding/xml"
+	"fmt"
+	"io"
+	"strings"
+)
+
+type MixedSeries struct {
+	Index    int
+	PlotType string
+	Axis     string
+	Formulas []Formula
+}
+
+type MixedChart struct {
+	Series []MixedSeries
+}
+
+func ParseMixed(r io.Reader) (*MixedChart, error) {
+	decoder := xml.NewDecoder(r)
+	out := &MixedChart{}
+
+	plotTypes := make(map[string]struct{})
+	var plots []*plotState
+	currentPlot := -1
+	barDepth := 0
+	lineDepth := 0
+
+	seriesIndex := -1
+	serDepth := 0
+	currentSeries := -1
+	catDepth := 0
+	valDepth := 0
+	txDepth := 0
+
+	inFormula := false
+	formulaKind := ""
+	var buf strings.Builder
+
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("parse mixed chart: %w", err)
+		}
+
+		switch tok := token.(type) {
+		case xml.StartElement:
+			switch tok.Name.Local {
+			case "barChart":
+				barDepth++
+				if barDepth == 1 {
+					plots = append(plots, newPlotState("bar"))
+					currentPlot = len(plots) - 1
+					plotTypes["bar"] = struct{}{}
+				}
+			case "lineChart":
+				lineDepth++
+				if lineDepth == 1 {
+					plots = append(plots, newPlotState("line"))
+					currentPlot = len(plots) - 1
+					plotTypes["line"] = struct{}{}
+				}
+			default:
+				if isUnsupportedPlot(tok.Name.Local) {
+					return nil, fmt.Errorf("unsupported plot type %q", tok.Name.Local)
+				}
+			}
+
+			if currentPlot >= 0 {
+				switch tok.Name.Local {
+				case "grouping":
+					for _, attr := range tok.Attr {
+						if attr.Name.Local == "val" {
+							if attr.Value == "stacked" || attr.Value == "percentStacked" {
+								return nil, fmt.Errorf("stacked charts are unsupported")
+							}
+						}
+					}
+				case "axId":
+					for _, attr := range tok.Attr {
+						if attr.Name.Local == "val" && attr.Value != "" {
+							plots[currentPlot].axisIDs[attr.Value] = struct{}{}
+						}
+					}
+				case "ser":
+					if serDepth == 0 {
+						seriesIndex++
+						out.Series = append(out.Series, MixedSeries{
+							Index:    seriesIndex,
+							PlotType: plots[currentPlot].plotType,
+						})
+						currentSeries = len(out.Series) - 1
+						plots[currentPlot].seriesIndices = append(plots[currentPlot].seriesIndices, seriesIndex)
+					}
+					serDepth++
+				case "cat":
+					if serDepth > 0 {
+						catDepth++
+					}
+				case "val":
+					if serDepth > 0 {
+						valDepth++
+					}
+				case "tx":
+					if serDepth > 0 {
+						txDepth++
+					}
+				case "f":
+					if serDepth > 0 {
+						kind := ""
+						if catDepth > 0 {
+							kind = KindCategories
+						} else if valDepth > 0 {
+							kind = KindValues
+						} else if txDepth > 0 {
+							kind = KindSeriesName
+						}
+						if kind != "" && currentSeries >= 0 {
+							inFormula = true
+							formulaKind = kind
+							buf.Reset()
+						}
+					}
+				}
+			}
+		case xml.EndElement:
+			switch tok.Name.Local {
+			case "barChart":
+				if barDepth > 0 {
+					barDepth--
+				}
+				if barDepth == 0 && lineDepth == 0 {
+					currentPlot = -1
+				}
+			case "lineChart":
+				if lineDepth > 0 {
+					lineDepth--
+				}
+				if barDepth == 0 && lineDepth == 0 {
+					currentPlot = -1
+				}
+			case "ser":
+				if serDepth > 0 {
+					serDepth--
+				}
+				if serDepth == 0 {
+					currentSeries = -1
+					catDepth = 0
+					valDepth = 0
+					txDepth = 0
+					inFormula = false
+					formulaKind = ""
+					buf.Reset()
+				}
+			case "cat":
+				if catDepth > 0 {
+					catDepth--
+				}
+			case "val":
+				if valDepth > 0 {
+					valDepth--
+				}
+			case "tx":
+				if txDepth > 0 {
+					txDepth--
+				}
+			case "f":
+				if inFormula && currentSeries >= 0 {
+					text := strings.TrimSpace(buf.String())
+					if text != "" {
+						out.Series[currentSeries].Formulas = append(out.Series[currentSeries].Formulas, Formula{
+							Kind:        formulaKind,
+							SeriesIndex: out.Series[currentSeries].Index,
+							Formula:     text,
+						})
+					}
+					inFormula = false
+					formulaKind = ""
+					buf.Reset()
+				}
+			}
+		case xml.CharData:
+			if inFormula {
+				buf.Write([]byte(tok))
+			}
+		}
+	}
+
+	if len(plotTypes) == 0 {
+		return nil, fmt.Errorf("no supported plot types found")
+	}
+	if len(plotTypes) != 2 || !hasPlot(plotTypes, "bar") || !hasPlot(plotTypes, "line") {
+		return nil, fmt.Errorf("unsupported mixed plot types")
+	}
+
+	assignMixedAxes(out.Series, plots)
+
+	return out, nil
+}
+
+type plotState struct {
+	plotType      string
+	axisIDs       map[string]struct{}
+	seriesIndices []int
+}
+
+func newPlotState(plotType string) *plotState {
+	return &plotState{
+		plotType: plotType,
+		axisIDs:  make(map[string]struct{}),
+	}
+}
+
+func assignMixedAxes(series []MixedSeries, plots []*plotState) {
+	if len(plots) == 0 || len(series) == 0 {
+		return
+	}
+
+	primaryIDs := plots[0].axisIDs
+	plotAxis := make([]string, len(plots))
+	for i, plot := range plots {
+		plotAxis[i] = "primary"
+		if len(primaryIDs) == 0 || len(plot.axisIDs) == 0 {
+			continue
+		}
+		if !equalStringSets(primaryIDs, plot.axisIDs) {
+			plotAxis[i] = "secondary"
+		}
+	}
+
+	for i := range plots {
+		for _, idx := range plots[i].seriesIndices {
+			if idx >= 0 && idx < len(series) {
+				series[idx].Axis = plotAxis[i]
+			}
+		}
+	}
+}
+
+func equalStringSets(a, b map[string]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for key := range a {
+		if _, ok := b[key]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func hasPlot(plotTypes map[string]struct{}, plot string) bool {
+	_, ok := plotTypes[plot]
+	return ok
+}
+
+func isUnsupportedPlot(name string) bool {
+	if name == "barChart" || name == "lineChart" {
+		return false
+	}
+	if strings.HasSuffix(name, "Chart") {
+		return true
+	}
+	return false
+}

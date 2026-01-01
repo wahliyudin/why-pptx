@@ -21,6 +21,7 @@ func ParseInfo(r io.Reader) (*Info, error) {
 	lineDepth := 0
 	pieDepth := 0
 	areaDepth := 0
+	otherDepth := 0
 	titleDepth := 0
 	inTitleText := false
 	titleSet := false
@@ -50,6 +51,11 @@ func ParseInfo(r io.Reader) (*Info, error) {
 			case "areaChart":
 				areaDepth++
 				info.ChartType = updateChartType(info.ChartType, "area")
+			default:
+				if isOtherChart(tok.Name.Local) {
+					otherDepth++
+					info.ChartType = updateChartType(info.ChartType, "other")
+				}
 			case "ser":
 				if barDepth > 0 || lineDepth > 0 || pieDepth > 0 || areaDepth > 0 {
 					info.SeriesCount++
@@ -79,6 +85,10 @@ func ParseInfo(r io.Reader) (*Info, error) {
 			case "areaChart":
 				if areaDepth > 0 {
 					areaDepth--
+				}
+			default:
+				if isOtherChart(tok.Name.Local) && otherDepth > 0 {
+					otherDepth--
 				}
 			case "title":
 				if titleDepth > 0 {

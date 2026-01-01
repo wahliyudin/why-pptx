@@ -65,6 +65,8 @@ flows; Strict mode generally returns errors instead of recording alerts.
 
 - EXTRACT_INVALID_RANGE: extracted range is invalid or unsupported.
   Context: slide, chart, workbook
+- EXTRACT_MIXED_CHART_DETECTED: mixed chart type is unsupported; chart is skipped.
+  Context: slide, chart, workbook, error
 - EXTRACT_SHAREDSTRINGS_UNSUPPORTED: sharedStrings usage detected in workbook.
   Context: slide, chart, workbook, sheetPath, cell
 - EXTRACT_SHEET_NOT_FOUND: referenced sheet name not found in workbook.

@@ -18,7 +18,7 @@ func (e ChartJSExporter) Format() ExportFormat {
 
 func (e ChartJSExporter) Export(in ExtractedChartData) (ExportedPayload, error) {
 	switch in.Type {
-	case "bar", "line", "pie", "area":
+	case "bar", "line", "pie", "area", "mixed":
 	default:
 		return ExportedPayload{}, fmt.Errorf("unsupported chart type %q", in.Type)
 	}
@@ -47,6 +47,46 @@ func (e ChartJSExporter) Export(in ExtractedChartData) (ExportedPayload, error) 
 					"label": series[0].Name,
 					"data":  values,
 				}},
+			},
+		}, nil
+	}
+
+	if in.Type == "mixed" {
+		if len(series) == 0 {
+			return ExportedPayload{}, fmt.Errorf("mixed chart requires at least one series")
+		}
+		chartType := "line"
+		for _, s := range series {
+			if s.PlotType == "bar" {
+				chartType = "bar"
+				break
+			}
+		}
+
+		datasets := make([]map[string]any, 0, len(series))
+		for _, s := range series {
+			if s.PlotType != "bar" && s.PlotType != "line" {
+				return ExportedPayload{}, fmt.Errorf("mixed chart series %d has unsupported plot type %q", s.Index, s.PlotType)
+			}
+			values, err := chartJSValues(s.Index, s.Data, e.MissingNumericPolicy)
+			if err != nil {
+				return ExportedPayload{}, err
+			}
+			dataset := map[string]any{
+				"label": s.Name,
+				"data":  values,
+				"type":  s.PlotType,
+			}
+			datasets = append(datasets, dataset)
+		}
+
+		labels := append([]string(nil), in.Labels...)
+		return ExportedPayload{
+			Format: ExportChartJS,
+			Data: map[string]any{
+				"type":     chartType,
+				"labels":   labels,
+				"datasets": datasets,
 			},
 		}, nil
 	}

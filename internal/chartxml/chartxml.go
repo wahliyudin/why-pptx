@@ -37,6 +37,7 @@ func Parse(r io.Reader) (*ParsedChart, error) {
 	lineDepth := 0
 	pieDepth := 0
 	areaDepth := 0
+	otherDepth := 0
 
 	inFormula := false
 	formulaKind := ""
@@ -67,6 +68,11 @@ func Parse(r io.Reader) (*ParsedChart, error) {
 			case "areaChart":
 				areaDepth++
 				out.ChartType = updateChartType(out.ChartType, "area")
+			default:
+				if isOtherChart(tok.Name.Local) {
+					otherDepth++
+					out.ChartType = updateChartType(out.ChartType, "other")
+				}
 			case "ser":
 				if barDepth+lineDepth+pieDepth+areaDepth > 0 {
 					seriesIndex++
@@ -119,6 +125,10 @@ func Parse(r io.Reader) (*ParsedChart, error) {
 			case "areaChart":
 				if areaDepth > 0 {
 					areaDepth--
+				}
+			default:
+				if isOtherChart(tok.Name.Local) && otherDepth > 0 {
+					otherDepth--
 				}
 			case "ser":
 				inSeries = false
@@ -175,4 +185,11 @@ func updateChartType(current, next string) string {
 		return current
 	}
 	return "mixed"
+}
+
+func isOtherChart(name string) bool {
+	if name == "barChart" || name == "lineChart" || name == "pieChart" || name == "areaChart" {
+		return false
+	}
+	return strings.HasSuffix(name, "Chart")
 }

@@ -139,6 +139,59 @@ func TestExtractChartDataByPath_AreaSimple(t *testing.T) {
 	}
 }
 
+func TestExtractChartDataByPath_MixedBarLine(t *testing.T) {
+	doc, err := OpenFile(fixturePath("mix_bar_line_simple.pptx"))
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	data, err := doc.ExtractChartDataByPath("ppt/charts/chart1.xml")
+	if err != nil {
+		t.Fatalf("ExtractChartDataByPath: %v", err)
+	}
+
+	if data.Type != "mixed" {
+		t.Fatalf("expected mixed chart, got %q", data.Type)
+	}
+	if !reflect.DeepEqual(data.Labels, []string{"Cat1", "Cat2"}) {
+		t.Fatalf("labels mismatch: %v", data.Labels)
+	}
+	if len(data.Series) != 2 {
+		t.Fatalf("expected 2 series, got %d", len(data.Series))
+	}
+	if data.Series[0].PlotType != "bar" || data.Series[1].PlotType != "line" {
+		t.Fatalf("unexpected plot types: %+v", data.Series)
+	}
+	if data.Series[0].Axis != "primary" || data.Series[1].Axis != "primary" {
+		t.Fatalf("unexpected axis values: %+v", data.Series)
+	}
+	if !reflect.DeepEqual(data.Series[0].Data, []string{"10", "20"}) {
+		t.Fatalf("series 0 data mismatch: %v", data.Series[0].Data)
+	}
+	if !reflect.DeepEqual(data.Series[1].Data, []string{"30", "40"}) {
+		t.Fatalf("series 1 data mismatch: %v", data.Series[1].Data)
+	}
+}
+
+func TestExtractChartDataByPath_MixedSecondaryAxis(t *testing.T) {
+	doc, err := OpenFile(fixturePath("mix_bar_line_secondary_axis.pptx"))
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	data, err := doc.ExtractChartDataByPath("ppt/charts/chart1.xml")
+	if err != nil {
+		t.Fatalf("ExtractChartDataByPath: %v", err)
+	}
+
+	if len(data.Series) != 2 {
+		t.Fatalf("expected 2 series, got %d", len(data.Series))
+	}
+	if data.Series[0].Axis != "primary" || data.Series[1].Axis != "secondary" {
+		t.Fatalf("unexpected axis values: %+v", data.Series)
+	}
+}
+
 func TestExportChartByPathFormat_Pie(t *testing.T) {
 	doc, err := OpenFile(fixturePath("pie_simple_embedded.pptx"))
 	if err != nil {
@@ -166,6 +219,21 @@ func TestExportChartByPathFormat_Area(t *testing.T) {
 	}
 	if payload.Data["type"] != "line" {
 		t.Fatalf("expected line type for area export, got %#v", payload.Data["type"])
+	}
+}
+
+func TestExportChartByPathFormat_Mixed(t *testing.T) {
+	doc, err := OpenFile(fixturePath("mix_bar_line_simple.pptx"))
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	payload, err := doc.ExportChartByPathFormat("ppt/charts/chart1.xml", ExportChartJS)
+	if err != nil {
+		t.Fatalf("ExportChartByPathFormat: %v", err)
+	}
+	if payload.Data["type"] != "bar" {
+		t.Fatalf("expected bar base type for mixed export, got %#v", payload.Data["type"])
 	}
 }
 
@@ -199,6 +267,39 @@ func TestExtractAllCharts_LinkedWorkbook_Strict(t *testing.T) {
 
 	if _, err := doc.ExtractAllCharts(); err == nil {
 		t.Fatalf("expected ExtractAllCharts error")
+	}
+}
+
+func TestExtractMixedUnsupported_Strict(t *testing.T) {
+	doc, err := OpenFile(fixturePath("mix_unsupported_variant.pptx"))
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	if _, err := doc.ExtractChartDataByPath("ppt/charts/chart1.xml"); err == nil {
+		t.Fatalf("expected ExtractChartDataByPath error")
+	}
+}
+
+func TestExtractMixedUnsupported_BestEffort(t *testing.T) {
+	opts := DefaultOptions()
+	opts.Mode = BestEffort
+	doc, err := OpenFile(fixturePath("mix_unsupported_variant.pptx"), WithOptions(opts))
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	charts, err := doc.ExtractAllCharts()
+	if err != nil {
+		t.Fatalf("ExtractAllCharts: %v", err)
+	}
+	if len(charts) != 0 {
+		t.Fatalf("expected no charts, got %d", len(charts))
+	}
+
+	alerts := doc.AlertsByCode("EXTRACT_MIXED_CHART_DETECTED")
+	if len(alerts) != 1 {
+		t.Fatalf("expected EXTRACT_MIXED_CHART_DETECTED alert, got %d", len(alerts))
 	}
 }
 
