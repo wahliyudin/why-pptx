@@ -104,6 +104,32 @@ for _, chart := range plan.Charts {
 }
 ```
 
+## Read-only extraction and export
+
+ExtractChartDataByPath reads embedded workbook values without modifying the PPTX.
+Single-chart extraction returns an error on unsupported input in both modes.
+In BestEffort, use ExtractAllCharts/ExportAllCharts to skip charts with alerts.
+
+```go
+doc, err := pptx.OpenFile("in.pptx")
+if err != nil {
+	// handle error
+}
+defer doc.Close()
+
+data, err := doc.ExtractChartDataByPath("ppt/charts/chart1.xml")
+if err != nil {
+	// handle error
+}
+
+payload, err := doc.ExportChartByPath("ppt/charts/chart1.xml", pptx.ChartJSExporter{
+	MissingNumericPolicy: pptx.MissingNumericEmpty,
+})
+if err != nil {
+	// handle error
+}
+```
+
 ## Options
 
 - `Options.Mode`: `Strict` (default) or `BestEffort`.
