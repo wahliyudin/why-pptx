@@ -33,12 +33,13 @@ type Logger interface {
 type Option func(*Document)
 
 type Document struct {
-	pkg     *ooxmlpkg.Package
-	overlay overlaystage.Overlay
-	alerts  []Alert
-	logger  Logger
-	strict  bool
-	opts    Options
+	pkg       *ooxmlpkg.Package
+	overlay   overlaystage.Overlay
+	alerts    []Alert
+	logger    Logger
+	strict    bool
+	opts      Options
+	exporters *ExporterRegistry
 }
 
 type EmbeddedChart struct {
@@ -153,6 +154,9 @@ func OpenFile(path string, opts ...Option) (*Document, error) {
 		if opt != nil {
 			opt(doc)
 		}
+	}
+	if doc.exporters == nil {
+		doc.exporters = defaultExporterRegistry(doc.opts)
 	}
 
 	return doc, nil
@@ -686,6 +690,16 @@ func WithLogger(logger Logger) Option {
 			return
 		}
 		d.logger = logger
+	}
+}
+
+// WithExporterRegistry overrides the default exporter registry.
+func WithExporterRegistry(registry *ExporterRegistry) Option {
+	return func(d *Document) {
+		if d == nil || registry == nil {
+			return
+		}
+		d.exporters = registry
 	}
 }
 

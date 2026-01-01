@@ -62,3 +62,5 @@ flows; Strict mode generally returns errors instead of recording alerts.
   Context: slide, chart, workbook, sheet
 - EXTRACT_CELL_PARSE_ERROR: cell value parse failed during extraction/export.
   Context: slide, chart, workbook, sheet, error
+- EXPORT_FORMAT_UNSUPPORTED: export format is not registered.
+  Context: format

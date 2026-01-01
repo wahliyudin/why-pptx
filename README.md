@@ -130,6 +130,28 @@ if err != nil {
 }
 ```
 
+Built-in exporters can also be selected by format:
+
+```go
+payload, err := doc.ExportChartByPathFormat("ppt/charts/chart1.xml", pptx.ExportChartJS)
+if err != nil {
+	// handle error
+}
+```
+
+To list formats or register custom exporters:
+
+```go
+reg := pptx.DefaultExporterRegistry()
+formats := reg.Formats()
+
+// reg.Register(MyExporter{})
+doc, err := pptx.OpenFile("in.pptx", pptx.WithExporterRegistry(reg))
+if err != nil {
+	// handle error
+}
+```
+
 ## Options
 
 - `Options.Mode`: `Strict` (default) or `BestEffort`.

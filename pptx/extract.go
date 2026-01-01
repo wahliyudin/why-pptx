@@ -202,6 +202,22 @@ func (d *Document) ExportAllCharts(exporter Exporter) ([]ExportedPayload, error)
 	return payloads, nil
 }
 
+func (d *Document) ExportChartByPathFormat(chartPath string, format ExportFormat) (ExportedPayload, error) {
+	exporter, err := d.exporterForFormat(format)
+	if err != nil {
+		return ExportedPayload{}, err
+	}
+	return d.ExportChartByPath(chartPath, exporter)
+}
+
+func (d *Document) ExportAllChartsFormat(format ExportFormat) ([]ExportedPayload, error) {
+	exporter, err := d.exporterForFormat(format)
+	if err != nil {
+		return nil, err
+	}
+	return d.ExportAllCharts(exporter)
+}
+
 type extractIssue struct {
 	code    string
 	message string
@@ -222,6 +238,30 @@ func (d *Document) handleExtractError(issue extractIssue) error {
 		})
 	}
 	return issue.err
+}
+
+func (d *Document) exporterForFormat(format ExportFormat) (Exporter, error) {
+	if d == nil || d.pkg == nil {
+		return nil, fmt.Errorf("document not initialized")
+	}
+	if format == "" {
+		return nil, fmt.Errorf("export format is required")
+	}
+	if d.exporters == nil {
+		d.exporters = defaultExporterRegistry(d.opts)
+	}
+
+	exporter, ok := d.exporters.Get(format)
+	if !ok || exporter == nil {
+		err := fmt.Errorf("export format %q not registered", format)
+		return nil, d.handleExtractError(extractIssue{
+			code:    "EXPORT_FORMAT_UNSUPPORTED",
+			message: extractMessageForCode("EXPORT_FORMAT_UNSUPPORTED"),
+			err:     err,
+			context: map[string]string{"format": string(format)},
+		})
+	}
+	return exporter, nil
 }
 
 func (d *Document) extractChartData(chart chartdiscover.EmbeddedChart) (ExtractedChartData, error) {
@@ -564,6 +604,8 @@ func extractMessageForCode(code string) string {
 		return "Workbook sheet not found"
 	case "EXTRACT_CELL_PARSE_ERROR":
 		return "Failed to parse workbook cells"
+	case "EXPORT_FORMAT_UNSUPPORTED":
+		return "Export format is not registered"
 	default:
 		return "Chart extraction failed"
 	}
