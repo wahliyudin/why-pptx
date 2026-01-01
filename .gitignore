@@ -1,3 +1,6 @@
 temp_extract/
-testdata/
 docs/
+testdata/*
+!testdata/README.md
+!testdata/pptx/
+!testdata/pptx/**
