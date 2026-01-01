@@ -1,5 +1,7 @@
 # Architecture Notes
 
+See CONTRACT.md for v1 guarantees, scope, and release governance.
+
 ## High-level flow
 
 PPTX (zip) -> discover charts -> edit workbook -> sync caches -> save
