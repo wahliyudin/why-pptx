@@ -1,4 +1,4 @@
-# v1.0.0 — Stable, correctness-first PPTX edits
+﻿# v1.0.0 - Stable, correctness-first PPTX edits
 
 This library edits PPTX files by updating embedded Excel workbooks and synchronizing
 chart caches for bar and line charts. It does not attempt to cover the full PPTX

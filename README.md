@@ -86,6 +86,24 @@ if err != nil {
 If multiple charts share the same title/alt text, ApplyChartDataByName returns
 an error (BestEffort also emits a CHART_NAME_AMBIGUOUS alert).
 
+## Plan mode (dry-run)
+
+PlanChanges computes what would be applied or skipped without modifying the
+document or writing output. It uses Strict/BestEffort to classify skips vs
+errors and does not run postflight validation, so some issues may only surface
+during apply.
+Unsupported chart types are marked with Action=unsupported and ReasonCode=CHART_TYPE_UNSUPPORTED.
+
+```go
+plan, err := doc.Plan()
+if err != nil {
+	// handle error
+}
+for _, chart := range plan.Charts {
+	// chart.Action, chart.ReasonCode, chart.Dependencies...
+}
+```
+
 ## Options
 
 - `Options.Mode`: `Strict` (default) or `BestEffort`.
