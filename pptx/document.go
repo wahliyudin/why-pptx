@@ -11,6 +11,7 @@ import (
 	"why-pptx/internal/chartxml"
 	"why-pptx/internal/ooxmlpkg"
 	"why-pptx/internal/overlaystage"
+	"why-pptx/internal/postflight"
 	"why-pptx/internal/xlref"
 	"why-pptx/internal/xlsxembed"
 )
@@ -411,6 +412,70 @@ func (d *Document) SetWorkbookCells(updates []CellUpdate) error {
 	return nil
 }
 
+func (d *Document) setWorkbookCellsInOverlay(overlay overlaystage.Overlay, updates []CellUpdate) error {
+	if d == nil || overlay == nil {
+		return fmt.Errorf("overlay not initialized")
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+
+	updatesByWorkbook := make(map[string][]CellUpdate)
+	for _, update := range updates {
+		updatesByWorkbook[update.WorkbookPath] = append(updatesByWorkbook[update.WorkbookPath], update)
+	}
+
+	for workbookPath, wbUpdates := range updatesByWorkbook {
+		if workbookPath == "" {
+			return fmt.Errorf("workbook path is required")
+		}
+
+		data, err := overlay.Get(workbookPath)
+		if err != nil {
+			return fmt.Errorf("read workbook %q: %w", workbookPath, err)
+		}
+
+		wb, err := xlsxembed.Open(data)
+		if err != nil {
+			return fmt.Errorf("open workbook %q: %w", workbookPath, err)
+		}
+
+		for _, update := range wbUpdates {
+			normalized, err := xlref.NormalizeCellRef(update.Cell)
+			if err != nil {
+				return fmt.Errorf("invalid cell %q: %w", update.Cell, err)
+			}
+			update.Cell = normalized
+
+			if update.Sheet == "" {
+				return fmt.Errorf("sheet name is required")
+			}
+
+			if err := validateCellValue(update.Value); err != nil {
+				return err
+			}
+
+			if err := wb.SetCell(update.Sheet, update.Cell, xlsxembed.CellValue{
+				Number: update.Value.Number,
+				String: update.Value.String,
+			}); err != nil {
+				return err
+			}
+		}
+
+		newBytes, err := wb.Save()
+		if err != nil {
+			return fmt.Errorf("save workbook %q: %w", workbookPath, err)
+		}
+
+		if err := overlay.Set(workbookPath, newBytes); err != nil {
+			return fmt.Errorf("write workbook %q: %w", workbookPath, err)
+		}
+	}
+
+	return nil
+}
+
 func (d *Document) SyncChartCaches() error {
 	if d == nil || d.pkg == nil {
 		return fmt.Errorf("document not initialized")
@@ -428,53 +493,19 @@ func (d *Document) SyncChartCaches() error {
 	}
 
 	for _, dep := range deps {
-		chartData, err := d.pkg.ReadPart(dep.ChartPath)
-		if err != nil {
-			if err := d.handleChartCacheError(dep, fmt.Errorf("read chart %q: %w", dep.ChartPath, err)); err != nil {
-				return err
-			}
-			continue
-		}
-
-		wbData, err := d.pkg.ReadPart(dep.WorkbookPath)
-		if err != nil {
-			if err := d.handleChartCacheError(dep, fmt.Errorf("read workbook %q: %w", dep.WorkbookPath, err)); err != nil {
-				return err
-			}
-			continue
-		}
-
-		wb, err := xlsxembed.Open(wbData)
-		if err != nil {
-			if err := d.handleChartCacheError(dep, fmt.Errorf("open workbook %q: %w", dep.WorkbookPath, err)); err != nil {
-				return err
-			}
-			continue
-		}
-
-		cacheDeps, err := toCacheDeps(dep)
-		if err != nil {
-			if err := d.handleChartCacheError(dep, err); err != nil {
-				return err
-			}
-			continue
-		}
-
-		updated, err := chartcache.SyncCaches(chartData, cacheDeps, func(kind chartcache.RangeKind, sheet, start, end string) ([]string, error) {
-			policy := xlsxembed.MissingNumericEmpty
-			if kind == chartcache.KindValues {
-				policy = xlsxembed.MissingNumericPolicy(d.opts.Workbook.MissingNumericPolicy)
-			}
-			return wb.GetRangeValues(sheet, start, end, policy)
+		ctx := d.validateContext(dep)
+		err := d.withChartStage(ctx, func(stage overlaystage.Overlay) error {
+			return d.syncChartCacheInOverlay(stage, dep)
 		})
 		if err != nil {
+			if postflight.IsPostflightError(err) {
+				return err
+			}
 			if err := d.handleChartCacheError(dep, err); err != nil {
 				return err
 			}
 			continue
 		}
-
-		d.pkg.WritePart(dep.ChartPath, updated)
 	}
 
 	return nil
@@ -570,13 +601,16 @@ func (d *Document) ApplyChartData(chartIndex int, data map[string][]string) erro
 		return fmt.Errorf("no chart ranges matched")
 	}
 
-	if err := d.SetWorkbookCells(updates); err != nil {
-		return err
-	}
-	if d.opts.Chart.CacheSync {
-		return d.SyncChartCaches()
-	}
-	return nil
+	ctx := d.validateContext(dep)
+	return d.withChartStage(ctx, func(stage overlaystage.Overlay) error {
+		if err := d.setWorkbookCellsInOverlay(stage, updates); err != nil {
+			return err
+		}
+		if d.opts.Chart.CacheSync {
+			return d.syncChartCacheInOverlay(stage, dep)
+		}
+		return nil
+	})
 }
 
 // Close is a no-op in v0; Document does not hold OS resources yet.
@@ -698,7 +732,7 @@ func WithErrorMode(mode ErrorMode) Option {
 	}
 }
 
-func (d *Document) withChartStage(chartPath string, fn func(stage overlaystage.Overlay) error) error {
+func (d *Document) withChartStage(ctx postflight.ValidateContext, fn func(stage overlaystage.Overlay) error) error {
 	if d == nil || d.pkg == nil {
 		return fmt.Errorf("document not initialized")
 	}
@@ -715,9 +749,83 @@ func (d *Document) withChartStage(chartPath string, fn func(stage overlaystage.O
 		stage.Discard()
 		return err
 	}
+
+	validator := postflight.NewPostflightValidator(&postflight.Document{
+		Overlay: d.overlay,
+		EmitAlert: func(code, message string, ctx map[string]string) {
+			d.addAlert(Alert{
+				Level:   "error",
+				Code:    code,
+				Message: message,
+				Context: ctx,
+			})
+		},
+	})
+	if err := validator.ValidateChartStage(ctx, stage); err != nil {
+		stage.Discard()
+		return err
+	}
+
 	if err := stage.Commit(); err != nil {
 		stage.Discard()
 		return err
+	}
+	return nil
+}
+
+func (d *Document) validateContext(dep ChartDependencies) postflight.ValidateContext {
+	mode := postflight.ModeStrict
+	if d.opts.Mode == BestEffort {
+		mode = postflight.ModeBestEffort
+	}
+	return postflight.ValidateContext{
+		ChartPath:            dep.ChartPath,
+		SlidePath:            dep.SlidePath,
+		WorkbookPath:         dep.WorkbookPath,
+		Mode:                 mode,
+		CacheSyncEnabled:     d.opts.Chart.CacheSync,
+		MissingNumericPolicy: int(d.opts.Workbook.MissingNumericPolicy),
+	}
+}
+
+func (d *Document) syncChartCacheInOverlay(overlay overlaystage.Overlay, dep ChartDependencies) error {
+	if overlay == nil {
+		return fmt.Errorf("overlay not initialized")
+	}
+
+	chartData, err := overlay.Get(dep.ChartPath)
+	if err != nil {
+		return fmt.Errorf("read chart %q: %w", dep.ChartPath, err)
+	}
+
+	wbData, err := overlay.Get(dep.WorkbookPath)
+	if err != nil {
+		return fmt.Errorf("read workbook %q: %w", dep.WorkbookPath, err)
+	}
+
+	wb, err := xlsxembed.Open(wbData)
+	if err != nil {
+		return fmt.Errorf("open workbook %q: %w", dep.WorkbookPath, err)
+	}
+
+	cacheDeps, err := toCacheDeps(dep)
+	if err != nil {
+		return err
+	}
+
+	updated, err := chartcache.SyncCaches(chartData, cacheDeps, func(kind chartcache.RangeKind, sheet, start, end string) ([]string, error) {
+		policy := xlsxembed.MissingNumericEmpty
+		if kind == chartcache.KindValues {
+			policy = xlsxembed.MissingNumericPolicy(d.opts.Workbook.MissingNumericPolicy)
+		}
+		return wb.GetRangeValues(sheet, start, end, policy)
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := overlay.Set(dep.ChartPath, updated); err != nil {
+		return fmt.Errorf("write chart %q: %w", dep.ChartPath, err)
 	}
 	return nil
 }
