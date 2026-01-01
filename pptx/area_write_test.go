@@ -64,7 +64,67 @@ func TestAreaApplyChartDataStrict(t *testing.T) {
 }
 
 func TestAreaApplyChartDataMultipleSeriesStrict(t *testing.T) {
-	doc, err := OpenFile(fixturePath("area_edit_multiple_series.pptx"))
+	input := fixturePath("area_multi_series_valid.pptx")
+	output := filepath.Join(t.TempDir(), "output.pptx")
+
+	doc, err := OpenFile(input)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	data := map[string][]string{
+		"categories": {"CatA", "CatB"},
+		"values:0":   {"11", "22"},
+		"values:1":   {"33", "44"},
+	}
+	if err := doc.ApplyChartDataByPath("ppt/charts/chart1.xml", data); err != nil {
+		t.Fatalf("ApplyChartDataByPath: %v", err)
+	}
+
+	if err := doc.SaveFile(output); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+
+	pptxassert.AssertSameEntrySet(t, input, output)
+
+	chartXML, err := pptxassert.ReadEntry(output, "ppt/charts/chart1.xml")
+	if err != nil {
+		t.Fatalf("ReadEntry chart: %v", err)
+	}
+	snap, err := pptxassert.ExtractChartCacheSnapshot(chartXML)
+	if err != nil {
+		t.Fatalf("ExtractChartCacheSnapshot: %v", err)
+	}
+	pptxassert.AssertCacheMatchesExpected(t, snap, pptxassert.ExpectedCache{
+		Series: []pptxassert.ExpectedCacheSeries{
+			{Kind: "strCache", SeriesIndex: 0, Values: []string{"CatA", "CatB"}},
+			{Kind: "numCache", SeriesIndex: 0, Values: []string{"11", "22"}},
+			{Kind: "strCache", SeriesIndex: 1, Values: []string{"CatA", "CatB"}},
+			{Kind: "numCache", SeriesIndex: 1, Values: []string{"33", "44"}},
+		},
+	})
+
+	workbook, err := pptxassert.ReadEntry(output, "ppt/embeddings/embeddedWorkbook1.xlsx")
+	if err != nil {
+		t.Fatalf("ReadEntry workbook: %v", err)
+	}
+	cells, err := pptxassert.ExtractWorkbookCellSnapshot(workbook, "Sheet1", []string{"A2", "A3", "B2", "B3", "C2", "C3"})
+	if err != nil {
+		t.Fatalf("ExtractWorkbookCellSnapshot: %v", err)
+	}
+	if cells["A2"] != "CatA" || cells["A3"] != "CatB" {
+		t.Fatalf("unexpected category cells: %v", cells)
+	}
+	if cells["B2"] != "11" || cells["B3"] != "22" {
+		t.Fatalf("unexpected series 0 cells: %v", cells)
+	}
+	if cells["C2"] != "33" || cells["C3"] != "44" {
+		t.Fatalf("unexpected series 1 cells: %v", cells)
+	}
+}
+
+func TestAreaApplyChartDataMismatchedCategoriesStrict(t *testing.T) {
+	doc, err := OpenFile(fixturePath("area_multi_series_mismatched_categories.pptx"))
 	if err != nil {
 		t.Fatalf("OpenFile: %v", err)
 	}
@@ -72,14 +132,15 @@ func TestAreaApplyChartDataMultipleSeriesStrict(t *testing.T) {
 	data := map[string][]string{
 		"categories": {"New1", "New2"},
 		"values:0":   {"1", "2"},
+		"values:1":   {"3", "4"},
 	}
 	if err := doc.ApplyChartDataByPath("ppt/charts/chart1.xml", data); err == nil {
 		t.Fatalf("expected ApplyChartDataByPath error")
 	}
 }
 
-func TestAreaApplyChartDataMultipleSeriesBestEffort(t *testing.T) {
-	input := fixturePath("area_edit_multiple_series.pptx")
+func TestAreaApplyChartDataMismatchedCategoriesBestEffort(t *testing.T) {
+	input := fixturePath("area_multi_series_mismatched_categories.pptx")
 	output := filepath.Join(t.TempDir(), "output.pptx")
 
 	opts := DefaultOptions()
@@ -92,14 +153,15 @@ func TestAreaApplyChartDataMultipleSeriesBestEffort(t *testing.T) {
 	data := map[string][]string{
 		"categories": {"New1", "New2"},
 		"values:0":   {"1", "2"},
+		"values:1":   {"3", "4"},
 	}
 	if err := doc.ApplyChartDataByPath("ppt/charts/chart1.xml", data); err == nil {
 		t.Fatalf("expected ApplyChartDataByPath error")
 	}
 
-	alerts := doc.AlertsByCode("WRITE_AREA_MULTIPLE_SERIES_UNSUPPORTED")
+	alerts := doc.AlertsByCode("CHART_DEPENDENCIES_PARSE_FAILED")
 	if len(alerts) != 1 {
-		t.Fatalf("expected WRITE_AREA_MULTIPLE_SERIES_UNSUPPORTED alert, got %d", len(alerts))
+		t.Fatalf("expected CHART_DEPENDENCIES_PARSE_FAILED alert, got %d", len(alerts))
 	}
 
 	if err := doc.SaveFile(output); err != nil {
@@ -123,7 +185,7 @@ func TestAreaApplyChartDataMultipleSeriesBestEffort(t *testing.T) {
 func TestAreaApplyChartDataLinkedWorkbookBestEffort(t *testing.T) {
 	opts := DefaultOptions()
 	opts.Mode = BestEffort
-	doc, err := OpenFile(fixturePath("area_edit_linked_workbook.pptx"), WithOptions(opts))
+	doc, err := OpenFile(fixturePath("area_multi_series_linked_workbook.pptx"), WithOptions(opts))
 	if err != nil {
 		t.Fatalf("OpenFile: %v", err)
 	}
@@ -144,6 +206,39 @@ func TestAreaApplyChartDataLinkedWorkbookBestEffort(t *testing.T) {
 
 func TestAreaPostflightInvalidCacheStrict(t *testing.T) {
 	input := fixturePath("area_edit_cache_invalid.pptx")
+	output := filepath.Join(t.TempDir(), "output.pptx")
+
+	doc, err := OpenFile(input)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	chartPath := "ppt/charts/chart1.xml"
+	badChart, err := pptxassert.ReadEntry(input, chartPath)
+	if err != nil {
+		t.Fatalf("ReadEntry chart: %v", err)
+	}
+
+	ctx := postflight.ValidateContext{
+		ChartPath:        chartPath,
+		Mode:             postflight.ModeStrict,
+		CacheSyncEnabled: true,
+	}
+	err = doc.withChartStage(ctx, func(stage overlaystage.Overlay) error {
+		return stage.Set(chartPath, badChart)
+	})
+	if err == nil {
+		t.Fatalf("expected postflight error")
+	}
+
+	if err := doc.SaveFile(output); err != nil {
+		t.Fatalf("SaveFile: %v", err)
+	}
+	pptxassert.AssertSameEntrySet(t, input, output)
+}
+
+func TestAreaPostflightInvalidCacheMultiSeriesStrict(t *testing.T) {
+	input := fixturePath("area_multi_series_cache_invalid.pptx")
 	output := filepath.Join(t.TempDir(), "output.pptx")
 
 	doc, err := OpenFile(input)

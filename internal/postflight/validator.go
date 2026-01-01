@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"path"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -335,6 +336,7 @@ const (
 
 type cacheState struct {
 	kind          string
+	role          string
 	seriesIndex   int
 	ptCount       int
 	ptCountSeen   bool
@@ -347,6 +349,8 @@ type cacheState struct {
 	inValue       bool
 	valueBuf      strings.Builder
 	hasValueError bool
+	inArea        bool
+	values        []string
 }
 
 func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overlaystage.StagingOverlay, chartPath string) error {
@@ -361,6 +365,13 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 	seriesCounter := -1
 	currentSeries := -1
 	serDepth := 0
+	catDepth := 0
+	valDepth := 0
+	txDepth := 0
+	areaDepth := 0
+	areaSeries := make(map[int]struct{})
+	areaCategories := make(map[int][]string)
+	areaValueCounts := make(map[int]int)
 	var cache *cacheState
 
 	for {
@@ -377,17 +388,48 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 		switch tok := token.(type) {
 		case xml.StartElement:
 			switch tok.Name.Local {
+			case "areaChart":
+				areaDepth++
 			case "ser":
 				if serDepth == 0 {
 					seriesCounter++
 					currentSeries = seriesCounter
+					if areaDepth > 0 {
+						areaSeries[currentSeries] = struct{}{}
+					}
 				}
 				serDepth++
+			case "cat":
+				if serDepth > 0 {
+					catDepth++
+				}
+			case "val":
+				if serDepth > 0 {
+					valDepth++
+				}
+			case "tx":
+				if serDepth > 0 {
+					txDepth++
+				}
 			case "strCache", "numCache":
+				role := ""
+				if tok.Name.Local == "strCache" {
+					if catDepth > 0 {
+						role = "categories"
+					} else if txDepth > 0 {
+						role = "seriesName"
+					}
+				} else if tok.Name.Local == "numCache" {
+					if valDepth > 0 {
+						role = "values"
+					}
+				}
 				cache = &cacheState{
 					kind:        tok.Name.Local,
+					role:        role,
 					seriesIndex: currentSeries,
 					ptIdx:       make(map[int]struct{}),
+					inArea:      areaDepth > 0,
 				}
 			case "ptCount":
 				if cache != nil {
@@ -425,12 +467,31 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 			}
 		case xml.EndElement:
 			switch tok.Name.Local {
+			case "areaChart":
+				if areaDepth > 0 {
+					areaDepth--
+				}
 			case "ser":
 				if serDepth > 0 {
 					serDepth--
 				}
 				if serDepth == 0 {
 					currentSeries = -1
+					catDepth = 0
+					valDepth = 0
+					txDepth = 0
+				}
+			case "cat":
+				if catDepth > 0 {
+					catDepth--
+				}
+			case "val":
+				if valDepth > 0 {
+					valDepth--
+				}
+			case "tx":
+				if txDepth > 0 {
+					txDepth--
 				}
 			case "v":
 				if cache != nil && cache.inValue {
@@ -443,6 +504,9 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 					if cache.kind == "strCache" {
 						if !cache.ptHasValue {
 							return v.cacheError(ctx, chartPath, cache, fmt.Errorf("missing strCache value"))
+						}
+						if cache.inArea && cache.role == "categories" {
+							cache.values = append(cache.values, cache.ptValue)
 						}
 					} else if cache.kind == "numCache" {
 						if err := validateNumericValue(cache.ptValue, ctx.MissingNumericPolicy); err != nil {
@@ -464,12 +528,47 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 					if err := validateIdxSequence(cache.ptIdx, cache.ptCount); err != nil {
 						return v.cacheError(ctx, chartPath, cache, err)
 					}
+					if cache.inArea {
+						if cache.role == "categories" {
+							areaCategories[cache.seriesIndex] = append([]string(nil), cache.values...)
+						} else if cache.role == "values" {
+							areaValueCounts[cache.seriesIndex] = cache.ptCount
+						}
+					}
 					cache = nil
 				}
 			}
 		case xml.CharData:
 			if cache != nil && cache.inValue {
 				cache.valueBuf.Write([]byte(tok))
+			}
+		}
+	}
+
+	if len(areaSeries) > 0 {
+		seriesKeys := sortedSeries(areaSeries)
+		if len(areaCategories) != len(areaSeries) {
+			return v.areaCacheError(ctx, chartPath, -1, fmt.Errorf("missing categories cache for area chart"))
+		}
+		if len(areaValueCounts) != len(areaSeries) {
+			return v.areaCacheError(ctx, chartPath, -1, fmt.Errorf("missing values cache for area chart"))
+		}
+
+		baseCats := areaCategories[seriesKeys[0]]
+		baseCount := areaValueCounts[seriesKeys[0]]
+		for _, idx := range seriesKeys {
+			cats, ok := areaCategories[idx]
+			if !ok {
+				return v.areaCacheError(ctx, chartPath, idx, fmt.Errorf("missing categories cache for series %d", idx))
+			}
+			if !equalStrings(cats, baseCats) {
+				return v.areaCacheError(ctx, chartPath, idx, fmt.Errorf("area chart categories must match across series"))
+			}
+			if areaValueCounts[idx] != baseCount {
+				return v.areaCacheError(ctx, chartPath, idx, fmt.Errorf("area chart ptCount mismatch across series"))
+			}
+			if len(cats) != baseCount {
+				return v.areaCacheError(ctx, chartPath, idx, fmt.Errorf("area chart categories/values length mismatch"))
 			}
 		}
 	}
@@ -483,6 +582,16 @@ func (v *PostflightValidator) cacheError(ctx ValidateContext, chartPath string, 
 	}
 	if cache != nil && cache.seriesIndex >= 0 {
 		extra["seriesIndex"] = fmt.Sprintf("%d", cache.seriesIndex)
+	}
+	return v.wrapError("POSTFLIGHT_CHART_CACHE_INVALID", err, ctx, extra)
+}
+
+func (v *PostflightValidator) areaCacheError(ctx ValidateContext, chartPath string, seriesIndex int, err error) error {
+	extra := map[string]string{
+		"partPath": chartPath,
+	}
+	if seriesIndex >= 0 {
+		extra["seriesIndex"] = fmt.Sprintf("%d", seriesIndex)
 	}
 	return v.wrapError("POSTFLIGHT_CHART_CACHE_INVALID", err, ctx, extra)
 }
@@ -562,6 +671,27 @@ func resolveRelTarget(basePart, relTarget string) string {
 
 func chartRelsPath(chartPath string) string {
 	return path.Join(path.Dir(chartPath), "_rels", path.Base(chartPath)+".rels")
+}
+
+func sortedSeries(series map[int]struct{}) []int {
+	keys := make([]int, 0, len(series))
+	for key := range series {
+		keys = append(keys, key)
+	}
+	sort.Ints(keys)
+	return keys
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func (v *PostflightValidator) hasBaseline(path string) (bool, error) {

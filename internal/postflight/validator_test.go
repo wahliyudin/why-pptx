@@ -340,6 +340,147 @@ func TestPostflightChartCacheInvalidNumeric(t *testing.T) {
 	}
 }
 
+func TestPostflightAreaCacheCategoriesMismatch(t *testing.T) {
+	chartXML := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart>
+    <c:plotArea>
+      <c:areaChart>
+        <c:ser>
+          <c:cat>
+            <c:strRef>
+              <c:strCache>
+                <c:ptCount val="2"/>
+                <c:pt idx="0"><c:v>A</c:v></c:pt>
+                <c:pt idx="1"><c:v>B</c:v></c:pt>
+              </c:strCache>
+            </c:strRef>
+          </c:cat>
+          <c:val>
+            <c:numRef>
+              <c:numCache>
+                <c:ptCount val="2"/>
+                <c:pt idx="0"><c:v>1</c:v></c:pt>
+                <c:pt idx="1"><c:v>2</c:v></c:pt>
+              </c:numCache>
+            </c:numRef>
+          </c:val>
+        </c:ser>
+        <c:ser>
+          <c:cat>
+            <c:strRef>
+              <c:strCache>
+                <c:ptCount val="2"/>
+                <c:pt idx="0"><c:v>A</c:v></c:pt>
+                <c:pt idx="1"><c:v>C</c:v></c:pt>
+              </c:strCache>
+            </c:strRef>
+          </c:cat>
+          <c:val>
+            <c:numRef>
+              <c:numCache>
+                <c:ptCount val="2"/>
+                <c:pt idx="0"><c:v>3</c:v></c:pt>
+                <c:pt idx="1"><c:v>4</c:v></c:pt>
+              </c:numCache>
+            </c:numRef>
+          </c:val>
+        </c:ser>
+      </c:areaChart>
+    </c:plotArea>
+  </c:chart>
+</c:chartSpace>`)
+
+	parent := newMemOverlay(map[string][]byte{
+		"ppt/charts/chart1.xml": chartXML,
+	})
+	var alerts []alertRecord
+	validator := newValidator(parent, &alerts)
+	stage := overlaystage.NewStagingOverlay(parent)
+	if err := stage.Set("ppt/charts/chart1.xml", chartXML); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	ctx := ValidateContext{ChartPath: "ppt/charts/chart1.xml", Mode: ModeStrict, CacheSyncEnabled: true}
+	if err := validator.ValidateChartStage(ctx, stage); err == nil {
+		t.Fatalf("expected chart cache error")
+	}
+	if len(alerts) != 1 || alerts[0].code != "POSTFLIGHT_CHART_CACHE_INVALID" {
+		t.Fatalf("expected POSTFLIGHT_CHART_CACHE_INVALID alert, got %#v", alerts)
+	}
+}
+
+func TestPostflightAreaCachePtCountMismatch(t *testing.T) {
+	chartXML := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart>
+    <c:plotArea>
+      <c:areaChart>
+        <c:ser>
+          <c:cat>
+            <c:strRef>
+              <c:strCache>
+                <c:ptCount val="2"/>
+                <c:pt idx="0"><c:v>A</c:v></c:pt>
+                <c:pt idx="1"><c:v>B</c:v></c:pt>
+              </c:strCache>
+            </c:strRef>
+          </c:cat>
+          <c:val>
+            <c:numRef>
+              <c:numCache>
+                <c:ptCount val="2"/>
+                <c:pt idx="0"><c:v>1</c:v></c:pt>
+                <c:pt idx="1"><c:v>2</c:v></c:pt>
+              </c:numCache>
+            </c:numRef>
+          </c:val>
+        </c:ser>
+        <c:ser>
+          <c:cat>
+            <c:strRef>
+              <c:strCache>
+                <c:ptCount val="2"/>
+                <c:pt idx="0"><c:v>A</c:v></c:pt>
+                <c:pt idx="1"><c:v>B</c:v></c:pt>
+              </c:strCache>
+            </c:strRef>
+          </c:cat>
+          <c:val>
+            <c:numRef>
+              <c:numCache>
+                <c:ptCount val="3"/>
+                <c:pt idx="0"><c:v>3</c:v></c:pt>
+                <c:pt idx="1"><c:v>4</c:v></c:pt>
+                <c:pt idx="2"><c:v>5</c:v></c:pt>
+              </c:numCache>
+            </c:numRef>
+          </c:val>
+        </c:ser>
+      </c:areaChart>
+    </c:plotArea>
+  </c:chart>
+</c:chartSpace>`)
+
+	parent := newMemOverlay(map[string][]byte{
+		"ppt/charts/chart1.xml": chartXML,
+	})
+	var alerts []alertRecord
+	validator := newValidator(parent, &alerts)
+	stage := overlaystage.NewStagingOverlay(parent)
+	if err := stage.Set("ppt/charts/chart1.xml", chartXML); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	ctx := ValidateContext{ChartPath: "ppt/charts/chart1.xml", Mode: ModeStrict, CacheSyncEnabled: true}
+	if err := validator.ValidateChartStage(ctx, stage); err == nil {
+		t.Fatalf("expected chart cache error")
+	}
+	if len(alerts) != 1 || alerts[0].code != "POSTFLIGHT_CHART_CACHE_INVALID" {
+		t.Fatalf("expected POSTFLIGHT_CHART_CACHE_INVALID alert, got %#v", alerts)
+	}
+}
+
 func TestPostflightWorksheetSharedStringCellType(t *testing.T) {
 	xlsx := buildXLSXWithSharedStringCell(t)
 	parent := newMemOverlay(map[string][]byte{

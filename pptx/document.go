@@ -2,7 +2,9 @@ package pptx
 
 import (
 	"bytes"
+	"encoding/xml"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -944,6 +946,9 @@ func (d *Document) validateWritableChart(dep ChartDependencies) error {
 		}
 	}
 	if dep.ChartType == "area" {
+		if code, err := d.validateAreaVariant(dep); err != nil {
+			return d.handleAreaWriteError(dep, code, err)
+		}
 		if code, err := validateAreaDependencies(dep); err != nil {
 			return d.handleAreaWriteError(dep, code, err)
 		}
@@ -1004,8 +1009,8 @@ func (d *Document) handleAreaWriteError(dep ChartDependencies, code string, err 
 	}
 
 	message := "Area chart is unsupported; chart is skipped"
-	if code == "WRITE_AREA_MULTIPLE_SERIES_UNSUPPORTED" {
-		message = "Area charts with multiple series are unsupported; chart is skipped"
+	if code == "WRITE_AREA_UNSUPPORTED_VARIANT" {
+		message = "Area chart variant is unsupported; chart is skipped"
 	} else if code == "CHART_DEPENDENCIES_PARSE_FAILED" {
 		message = "Failed to extract chart dependencies; chart is skipped"
 	}
@@ -1023,6 +1028,72 @@ func (d *Document) handleAreaWriteError(dep ChartDependencies, code string, err 
 	})
 
 	return err
+}
+
+func (d *Document) validateAreaVariant(dep ChartDependencies) (string, error) {
+	if d == nil || d.pkg == nil {
+		return "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("document not initialized")
+	}
+	data, err := d.pkg.ReadPart(dep.ChartPath)
+	if err != nil {
+		return "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("read chart %q: %w", dep.ChartPath, err)
+	}
+
+	decoder := xml.NewDecoder(bytes.NewReader(data))
+	areaDepth := 0
+	areaCharts := 0
+	axIDs := make(map[string]struct{})
+
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("parse chart %q: %w", dep.ChartPath, err)
+		}
+
+		switch tok := token.(type) {
+		case xml.StartElement:
+			switch tok.Name.Local {
+			case "areaChart":
+				areaDepth++
+				areaCharts++
+			case "area3DChart":
+				return "WRITE_AREA_UNSUPPORTED_VARIANT", fmt.Errorf("area3D charts are unsupported")
+			case "grouping":
+				if areaDepth > 0 {
+					for _, attr := range tok.Attr {
+						if attr.Name.Local == "val" {
+							if attr.Value == "stacked" || attr.Value == "percentStacked" {
+								return "WRITE_AREA_UNSUPPORTED_VARIANT", fmt.Errorf("stacked area charts are unsupported")
+							}
+						}
+					}
+				}
+			case "axId":
+				if areaDepth > 0 {
+					for _, attr := range tok.Attr {
+						if attr.Name.Local == "val" && attr.Value != "" {
+							axIDs[attr.Value] = struct{}{}
+						}
+					}
+				}
+			}
+		case xml.EndElement:
+			if tok.Name.Local == "areaChart" && areaDepth > 0 {
+				areaDepth--
+			}
+		}
+	}
+
+	if areaCharts > 1 {
+		return "WRITE_AREA_UNSUPPORTED_VARIANT", fmt.Errorf("multiple area charts are unsupported")
+	}
+	if len(axIDs) > 2 {
+		return "WRITE_AREA_UNSUPPORTED_VARIANT", fmt.Errorf("secondary axis area charts are unsupported")
+	}
+	return "", nil
 }
 
 func validatePieDependencies(dep ChartDependencies) (string, error) {
@@ -1059,32 +1130,42 @@ func validatePieDependencies(dep ChartDependencies) (string, error) {
 }
 
 func validateAreaDependencies(dep ChartDependencies) (string, error) {
-	valueSeries := make(map[int]struct{})
-	catSeries := make(map[int]struct{})
+	valueRanges := make(map[int]ChartRange)
+	catRanges := make(map[int]ChartRange)
 
 	for _, r := range dep.Ranges {
 		switch r.Kind {
 		case RangeValues:
-			valueSeries[r.SeriesIndex] = struct{}{}
+			if _, ok := valueRanges[r.SeriesIndex]; ok {
+				return "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("duplicate values range for series %d", r.SeriesIndex)
+			}
+			valueRanges[r.SeriesIndex] = r
 		case RangeCategories:
-			catSeries[r.SeriesIndex] = struct{}{}
+			if _, ok := catRanges[r.SeriesIndex]; ok {
+				return "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("duplicate categories range for series %d", r.SeriesIndex)
+			}
+			catRanges[r.SeriesIndex] = r
 		}
 	}
 
-	if len(valueSeries) == 0 || len(catSeries) == 0 {
+	if len(valueRanges) == 0 || len(catRanges) == 0 {
 		return "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("area chart requires categories and values")
 	}
-	if len(valueSeries) > 1 || len(catSeries) > 1 {
-		return "WRITE_AREA_MULTIPLE_SERIES_UNSUPPORTED", fmt.Errorf("area chart requires exactly one series")
+
+	if len(valueRanges) != len(catRanges) {
+		return "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("area chart categories/values series mismatch")
 	}
 
-	seriesIndex := -1
-	for idx := range valueSeries {
-		seriesIndex = idx
-	}
-	for idx := range catSeries {
-		if idx != seriesIndex {
+	var catKey string
+	for idx, cat := range catRanges {
+		if _, ok := valueRanges[idx]; !ok {
 			return "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("area chart categories/values series mismatch")
+		}
+		key := cat.Sheet + "!" + cat.StartCell + ":" + cat.EndCell
+		if catKey == "" {
+			catKey = key
+		} else if key != catKey {
+			return "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("area chart categories must match across series")
 		}
 	}
 

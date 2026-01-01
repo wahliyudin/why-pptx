@@ -215,14 +215,20 @@ func TestSyncCachesAreaSingleSeries(t *testing.T) {
 	}
 }
 
-func TestSyncCachesAreaMultipleSeriesErrors(t *testing.T) {
+func TestSyncCachesAreaMultipleSeriesUpdates(t *testing.T) {
 	xml := `<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
   <c:chart>
     <c:plotArea>
       <c:areaChart>
-        <c:ser></c:ser>
-        <c:ser></c:ser>
+        <c:ser>
+          <c:cat><c:strRef><c:f>Sheet1!$A$2:$A$3</c:f><c:strCache><c:ptCount val="2"/><c:pt idx="0"><c:v>OldA</c:v></c:pt><c:pt idx="1"><c:v>OldB</c:v></c:pt></c:strCache></c:strRef></c:cat>
+          <c:val><c:numRef><c:f>Sheet1!$B$2:$B$3</c:f><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numCache></c:numRef></c:val>
+        </c:ser>
+        <c:ser>
+          <c:cat><c:strRef><c:f>Sheet1!$A$2:$A$3</c:f><c:strCache><c:ptCount val="2"/><c:pt idx="0"><c:v>OldA</c:v></c:pt><c:pt idx="1"><c:v>OldB</c:v></c:pt></c:strCache></c:strRef></c:cat>
+          <c:val><c:numRef><c:f>Sheet1!$C$2:$C$3</c:f><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>3</c:v></c:pt><c:pt idx="1"><c:v>4</c:v></c:pt></c:numCache></c:numRef></c:val>
+        </c:ser>
       </c:areaChart>
     </c:plotArea>
   </c:chart>
@@ -231,17 +237,81 @@ func TestSyncCachesAreaMultipleSeriesErrors(t *testing.T) {
 	deps := Dependencies{
 		ChartType: "area",
 		Ranges: []Range{
-			{Kind: KindCategories, SeriesIndex: 0, Sheet: "Sheet1", StartCell: "A1", EndCell: "A2"},
-			{Kind: KindValues, SeriesIndex: 0, Sheet: "Sheet1", StartCell: "B1", EndCell: "B2"},
-			{Kind: KindValues, SeriesIndex: 1, Sheet: "Sheet1", StartCell: "C1", EndCell: "C2"},
+			{Kind: KindCategories, SeriesIndex: 0, Sheet: "Sheet1", StartCell: "A2", EndCell: "A3"},
+			{Kind: KindValues, SeriesIndex: 0, Sheet: "Sheet1", StartCell: "B2", EndCell: "B3"},
+			{Kind: KindCategories, SeriesIndex: 1, Sheet: "Sheet1", StartCell: "A2", EndCell: "A3"},
+			{Kind: KindValues, SeriesIndex: 1, Sheet: "Sheet1", StartCell: "C2", EndCell: "C3"},
 		},
 	}
 
-	_, err := SyncCaches([]byte(xml), deps, func(_ RangeKind, _, _, _ string) ([]string, error) {
+	provider := func(kind RangeKind, sheet, start, end string) ([]string, error) {
+		key := sheet + "!" + start + ":" + end
+		switch key {
+		case "Sheet1!A2:A3":
+			return []string{"Cat1", "Cat2"}, nil
+		case "Sheet1!B2:B3":
+			return []string{"10", "20"}, nil
+		case "Sheet1!C2:C3":
+			return []string{"30", "40"}, nil
+		default:
+			return []string{}, nil
+		}
+	}
+
+	out, err := SyncCaches([]byte(xml), deps, provider)
+	if err != nil {
+		t.Fatalf("SyncCaches: %v", err)
+	}
+
+	cats, nums := extractCacheValues(t, out)
+	if len(cats) != 4 || len(nums) != 4 {
+		t.Fatalf("expected cache values, got cats=%v nums=%v", cats, nums)
+	}
+	if cats[0] != "Cat1" || cats[2] != "Cat1" {
+		t.Fatalf("unexpected category values: %v", cats)
+	}
+	if nums[1] != "20" || nums[3] != "40" {
+		t.Fatalf("unexpected numeric values: %v", nums)
+	}
+}
+
+func TestSyncCachesAreaMismatchedCategoriesErrors(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart>
+    <c:plotArea>
+      <c:areaChart>
+        <c:ser>
+          <c:cat><c:strRef><c:f>Sheet1!$A$2:$A$3</c:f></c:strRef></c:cat>
+          <c:val><c:numRef><c:f>Sheet1!$B$2:$B$3</c:f></c:numRef></c:val>
+        </c:ser>
+        <c:ser>
+          <c:cat><c:strRef><c:f>Sheet1!$A$4:$A$5</c:f></c:strRef></c:cat>
+          <c:val><c:numRef><c:f>Sheet1!$C$2:$C$3</c:f></c:numRef></c:val>
+        </c:ser>
+      </c:areaChart>
+    </c:plotArea>
+  </c:chart>
+</c:chartSpace>`
+
+	deps := Dependencies{
+		ChartType: "area",
+		Ranges: []Range{
+			{Kind: KindCategories, SeriesIndex: 0, Sheet: "Sheet1", StartCell: "A2", EndCell: "A3"},
+			{Kind: KindValues, SeriesIndex: 0, Sheet: "Sheet1", StartCell: "B2", EndCell: "B3"},
+			{Kind: KindCategories, SeriesIndex: 1, Sheet: "Sheet1", StartCell: "A4", EndCell: "A5"},
+			{Kind: KindValues, SeriesIndex: 1, Sheet: "Sheet1", StartCell: "C2", EndCell: "C3"},
+		},
+	}
+
+	_, err := SyncCaches([]byte(xml), deps, func(kind RangeKind, _, start, end string) ([]string, error) {
+		if kind == KindCategories && start == "A4" && end == "A5" {
+			return []string{"X", "Y"}, nil
+		}
 		return []string{"1", "2"}, nil
 	})
 	if err == nil {
-		t.Fatalf("expected error for area multi-series")
+		t.Fatalf("expected error for mismatched area categories")
 	}
 }
 

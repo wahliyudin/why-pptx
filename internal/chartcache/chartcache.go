@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"sort"
 )
 
 type RangeKind string
@@ -40,7 +41,7 @@ func SyncCaches(chartXML []byte, deps Dependencies, provider ValueProvider) ([]b
 		return nil, err
 	}
 
-	if deps.ChartType == "pie" || deps.ChartType == "area" {
+	if deps.ChartType == "pie" {
 		if len(seriesData) != 1 {
 			return nil, fmt.Errorf("%s chart requires exactly one series", deps.ChartType)
 		}
@@ -50,6 +51,11 @@ func SyncCaches(chartXML []byte, deps Dependencies, provider ValueProvider) ([]b
 		}
 		if entry.categories == nil || entry.values == nil {
 			return nil, fmt.Errorf("%s chart requires categories and values", deps.ChartType)
+		}
+	}
+	if deps.ChartType == "area" {
+		if err := validateAreaSeries(seriesData); err != nil {
+			return nil, err
 		}
 	}
 
@@ -207,8 +213,11 @@ func SyncCaches(chartXML []byte, deps Dependencies, provider ValueProvider) ([]b
 	if !foundTarget {
 		return nil, fmt.Errorf("chart type %q not found", deps.ChartType)
 	}
-	if (deps.ChartType == "pie" || deps.ChartType == "area") && seriesTotal > 1 {
+	if deps.ChartType == "pie" && seriesTotal > 1 {
 		return nil, fmt.Errorf("%s chart requires exactly one series", deps.ChartType)
+	}
+	if deps.ChartType == "area" && seriesTotal != len(seriesData) {
+		return nil, fmt.Errorf("area chart requires dependencies for each series")
 	}
 
 	for index := range seriesData {
@@ -354,6 +363,49 @@ func validateSeries(series map[int]*seriesCache, index int) error {
 		return fmt.Errorf("missing series name reference for series %d", index)
 	}
 	return nil
+}
+
+func validateAreaSeries(series map[int]*seriesCache) error {
+	if len(series) == 0 {
+		return fmt.Errorf("area chart requires categories and values")
+	}
+	keys := make([]int, 0, len(series))
+	for key := range series {
+		keys = append(keys, key)
+	}
+	sort.Ints(keys)
+
+	base := series[keys[0]]
+	if base == nil || base.categories == nil || base.values == nil {
+		return fmt.Errorf("area chart requires categories and values for each series")
+	}
+
+	for _, key := range keys {
+		entry := series[key]
+		if entry == nil || entry.categories == nil || entry.values == nil {
+			return fmt.Errorf("area chart requires categories and values for each series")
+		}
+		if !equalStrings(entry.categories, base.categories) {
+			return fmt.Errorf("area chart categories must match across series")
+		}
+		if len(entry.values) != len(entry.categories) {
+			return fmt.Errorf("area chart values length mismatch for series %d", key)
+		}
+	}
+
+	return nil
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func refKindFor(refName string, catDepth, valDepth, txDepth int) RangeKind {
