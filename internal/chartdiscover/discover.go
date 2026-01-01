@@ -66,7 +66,14 @@ func DiscoverChartRefs(pkg PartReader) ([]ChartRef, error) {
 			return nil, err
 		}
 
-		for _, rel := range parsed.ByID {
+		ids := make([]string, 0, len(parsed.ByID))
+		for id := range parsed.ByID {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+
+		for _, id := range ids {
+			rel := parsed.ByID[id]
 			if !strings.HasSuffix(rel.Type, "/chart") {
 				continue
 			}

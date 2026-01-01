@@ -121,3 +121,85 @@ func TestParseIgnoresEmptyFormulas(t *testing.T) {
 		t.Fatalf("unexpected formula: %q", parsed.Formulas[0].Formula)
 	}
 }
+
+func TestParsePieChartFormulas(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart>
+    <c:plotArea>
+      <c:pieChart>
+        <c:ser>
+          <c:cat><c:strRef><c:f>Sheet1!$A$2:$A$4</c:f></c:strRef></c:cat>
+          <c:val><c:numRef><c:f>Sheet1!$B$2:$B$4</c:f></c:numRef></c:val>
+        </c:ser>
+      </c:pieChart>
+    </c:plotArea>
+  </c:chart>
+</c:chartSpace>`
+
+	parsed, err := Parse(strings.NewReader(xml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if parsed.ChartType != "pie" {
+		t.Fatalf("expected pie chart type, got %q", parsed.ChartType)
+	}
+	if len(parsed.Formulas) != 2 {
+		t.Fatalf("expected 2 formulas, got %d", len(parsed.Formulas))
+	}
+}
+
+func TestParseAreaChartFormulas(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart>
+    <c:plotArea>
+      <c:areaChart>
+        <c:ser>
+          <c:cat><c:strRef><c:f>Sheet1!$A$2:$A$4</c:f></c:strRef></c:cat>
+          <c:val><c:numRef><c:f>Sheet1!$B$2:$B$4</c:f></c:numRef></c:val>
+        </c:ser>
+      </c:areaChart>
+    </c:plotArea>
+  </c:chart>
+</c:chartSpace>`
+
+	parsed, err := Parse(strings.NewReader(xml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if parsed.ChartType != "area" {
+		t.Fatalf("expected area chart type, got %q", parsed.ChartType)
+	}
+	if len(parsed.Formulas) != 2 {
+		t.Fatalf("expected 2 formulas, got %d", len(parsed.Formulas))
+	}
+}
+
+func TestParseMixedChartType(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart>
+    <c:plotArea>
+      <c:barChart>
+        <c:ser>
+          <c:val><c:numRef><c:f>Sheet1!$B$2:$B$3</c:f></c:numRef></c:val>
+        </c:ser>
+      </c:barChart>
+      <c:pieChart>
+        <c:ser>
+          <c:val><c:numRef><c:f>Sheet1!$C$2:$C$3</c:f></c:numRef></c:val>
+        </c:ser>
+      </c:pieChart>
+    </c:plotArea>
+  </c:chart>
+</c:chartSpace>`
+
+	parsed, err := Parse(strings.NewReader(xml))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if parsed.ChartType != "mixed" {
+		t.Fatalf("expected mixed chart type, got %q", parsed.ChartType)
+	}
+}

@@ -284,7 +284,7 @@ func (d *Document) extractChartData(chart chartdiscover.EmbeddedChart) (Extracte
 		})
 	}
 
-	if deps.ChartType != "bar" && deps.ChartType != "line" {
+	if deps.ChartType != "bar" && deps.ChartType != "line" && deps.ChartType != "pie" && deps.ChartType != "area" {
 		return ExtractedChartData{}, d.handleExtractError(extractIssue{
 			code:    "CHART_TYPE_UNSUPPORTED",
 			message: extractMessageForCode("CHART_TYPE_UNSUPPORTED"),
@@ -372,6 +372,20 @@ func (d *Document) extractChartData(chart chartdiscover.EmbeddedChart) (Extracte
 	}
 
 	catRange, valuesRanges, nameRanges := splitDependencies(deps.Ranges)
+	if deps.ChartType == "pie" {
+		if len(valuesRanges) == 0 || len(valuesRanges) > 1 {
+			return ExtractedChartData{}, d.handleExtractError(extractIssue{
+				code:    "EXTRACT_INVALID_RANGE",
+				message: extractMessageForCode("EXTRACT_INVALID_RANGE"),
+				err:     fmt.Errorf("pie chart requires exactly one series"),
+				context: map[string]string{
+					"chart":    chart.ChartPath,
+					"slide":    chart.SlidePath,
+					"workbook": chart.WorkbookPath,
+				},
+			})
+		}
+	}
 	labels := []string{}
 	primarySheet := ""
 	if catRange != nil {

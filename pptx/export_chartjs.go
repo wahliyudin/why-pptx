@@ -17,7 +17,9 @@ func (e ChartJSExporter) Format() ExportFormat {
 }
 
 func (e ChartJSExporter) Export(in ExtractedChartData) (ExportedPayload, error) {
-	if in.Type != "bar" && in.Type != "line" {
+	switch in.Type {
+	case "bar", "line", "pie", "area":
+	default:
 		return ExportedPayload{}, fmt.Errorf("unsupported chart type %q", in.Type)
 	}
 
@@ -27,31 +29,72 @@ func (e ChartJSExporter) Export(in ExtractedChartData) (ExportedPayload, error) 
 		return series[i].Index < series[j].Index
 	})
 
+	if in.Type == "pie" {
+		if len(series) != 1 {
+			return ExportedPayload{}, fmt.Errorf("pie chart requires a single series")
+		}
+		values, err := chartJSValues(series[0].Index, series[0].Data, e.MissingNumericPolicy)
+		if err != nil {
+			return ExportedPayload{}, err
+		}
+		labels := append([]string(nil), in.Labels...)
+		return ExportedPayload{
+			Format: ExportChartJS,
+			Data: map[string]any{
+				"type":   "pie",
+				"labels": labels,
+				"datasets": []map[string]any{{
+					"label": series[0].Name,
+					"data":  values,
+				}},
+			},
+		}, nil
+	}
+
+	chartType := in.Type
+	fill := false
+	if in.Type == "area" {
+		chartType = "line"
+		fill = true
+	}
+
 	datasets := make([]map[string]any, 0, len(series))
 	for _, s := range series {
-		values := make([]any, len(s.Data))
-		for i, raw := range s.Data {
-			val, err := chartJSValue(raw, e.MissingNumericPolicy)
-			if err != nil {
-				return ExportedPayload{}, fmt.Errorf("series %d value %q: %w", s.Index, raw, err)
-			}
-			values[i] = val
+		values, err := chartJSValues(s.Index, s.Data, e.MissingNumericPolicy)
+		if err != nil {
+			return ExportedPayload{}, err
 		}
-		datasets = append(datasets, map[string]any{
+		dataset := map[string]any{
 			"label": s.Name,
 			"data":  values,
-		})
+		}
+		if fill {
+			dataset["fill"] = true
+		}
+		datasets = append(datasets, dataset)
 	}
 
 	labels := append([]string(nil), in.Labels...)
 	return ExportedPayload{
 		Format: ExportChartJS,
 		Data: map[string]any{
-			"type":     in.Type,
+			"type":     chartType,
 			"labels":   labels,
 			"datasets": datasets,
 		},
 	}, nil
+}
+
+func chartJSValues(seriesIndex int, values []string, policy MissingNumericPolicy) ([]any, error) {
+	out := make([]any, len(values))
+	for i, raw := range values {
+		val, err := chartJSValue(raw, policy)
+		if err != nil {
+			return nil, fmt.Errorf("series %d value %q: %w", seriesIndex, raw, err)
+		}
+		out[i] = val
+	}
+	return out, nil
 }
 
 func chartJSValue(raw string, policy MissingNumericPolicy) (any, error) {

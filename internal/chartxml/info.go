@@ -19,6 +19,8 @@ func ParseInfo(r io.Reader) (*Info, error) {
 
 	barDepth := 0
 	lineDepth := 0
+	pieDepth := 0
+	areaDepth := 0
 	titleDepth := 0
 	inTitleText := false
 	titleSet := false
@@ -38,16 +40,18 @@ func ParseInfo(r io.Reader) (*Info, error) {
 			switch tok.Name.Local {
 			case "barChart":
 				barDepth++
-				if info.ChartType == "unknown" {
-					info.ChartType = "bar"
-				}
+				info.ChartType = updateChartType(info.ChartType, "bar")
 			case "lineChart":
 				lineDepth++
-				if info.ChartType == "unknown" {
-					info.ChartType = "line"
-				}
+				info.ChartType = updateChartType(info.ChartType, "line")
+			case "pieChart":
+				pieDepth++
+				info.ChartType = updateChartType(info.ChartType, "pie")
+			case "areaChart":
+				areaDepth++
+				info.ChartType = updateChartType(info.ChartType, "area")
 			case "ser":
-				if barDepth > 0 || lineDepth > 0 {
+				if barDepth > 0 || lineDepth > 0 || pieDepth > 0 || areaDepth > 0 {
 					info.SeriesCount++
 				}
 			case "title":
@@ -67,6 +71,14 @@ func ParseInfo(r io.Reader) (*Info, error) {
 			case "lineChart":
 				if lineDepth > 0 {
 					lineDepth--
+				}
+			case "pieChart":
+				if pieDepth > 0 {
+					pieDepth--
+				}
+			case "areaChart":
+				if areaDepth > 0 {
+					areaDepth--
 				}
 			case "title":
 				if titleDepth > 0 {

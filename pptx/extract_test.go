@@ -89,6 +89,86 @@ func TestExtractChartDataByPath_LineMultiSeries(t *testing.T) {
 	}
 }
 
+func TestExtractChartDataByPath_PieSimple(t *testing.T) {
+	doc, err := OpenFile(fixturePath("pie_simple_embedded.pptx"))
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	data, err := doc.ExtractChartDataByPath("ppt/charts/chart1.xml")
+	if err != nil {
+		t.Fatalf("ExtractChartDataByPath: %v", err)
+	}
+
+	if data.Type != "pie" {
+		t.Fatalf("expected pie chart, got %q", data.Type)
+	}
+	if !reflect.DeepEqual(data.Labels, []string{"Slice1", "Slice2", "Slice3"}) {
+		t.Fatalf("labels mismatch: %v", data.Labels)
+	}
+	if len(data.Series) != 1 {
+		t.Fatalf("expected 1 series, got %d", len(data.Series))
+	}
+	if !reflect.DeepEqual(data.Series[0].Data, []string{"5", "15", "25"}) {
+		t.Fatalf("series data mismatch: %v", data.Series[0].Data)
+	}
+}
+
+func TestExtractChartDataByPath_AreaSimple(t *testing.T) {
+	doc, err := OpenFile(fixturePath("area_simple_embedded.pptx"))
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	data, err := doc.ExtractChartDataByPath("ppt/charts/chart1.xml")
+	if err != nil {
+		t.Fatalf("ExtractChartDataByPath: %v", err)
+	}
+
+	if data.Type != "area" {
+		t.Fatalf("expected area chart, got %q", data.Type)
+	}
+	if !reflect.DeepEqual(data.Labels, []string{"Cat1", "Cat2"}) {
+		t.Fatalf("labels mismatch: %v", data.Labels)
+	}
+	if len(data.Series) != 1 {
+		t.Fatalf("expected 1 series, got %d", len(data.Series))
+	}
+	if !reflect.DeepEqual(data.Series[0].Data, []string{"10", "20"}) {
+		t.Fatalf("series data mismatch: %v", data.Series[0].Data)
+	}
+}
+
+func TestExportChartByPathFormat_Pie(t *testing.T) {
+	doc, err := OpenFile(fixturePath("pie_simple_embedded.pptx"))
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	payload, err := doc.ExportChartByPathFormat("ppt/charts/chart1.xml", ExportChartJS)
+	if err != nil {
+		t.Fatalf("ExportChartByPathFormat: %v", err)
+	}
+	if payload.Data["type"] != "pie" {
+		t.Fatalf("unexpected chartjs type: %#v", payload.Data["type"])
+	}
+}
+
+func TestExportChartByPathFormat_Area(t *testing.T) {
+	doc, err := OpenFile(fixturePath("area_simple_embedded.pptx"))
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	payload, err := doc.ExportChartByPathFormat("ppt/charts/chart1.xml", ExportChartJS)
+	if err != nil {
+		t.Fatalf("ExportChartByPathFormat: %v", err)
+	}
+	if payload.Data["type"] != "line" {
+		t.Fatalf("expected line type for area export, got %#v", payload.Data["type"])
+	}
+}
+
 func TestExtractAllCharts_LinkedWorkbook_BestEffort(t *testing.T) {
 	opts := DefaultOptions()
 	opts.Mode = BestEffort
@@ -150,6 +230,54 @@ func TestExtractChartDataByPath_SharedStrings_Strict(t *testing.T) {
 		t.Fatalf("OpenFile: %v", err)
 	}
 
+	if _, err := doc.ExtractChartDataByPath("ppt/charts/chart1.xml"); err == nil {
+		t.Fatalf("expected ExtractChartDataByPath error")
+	}
+}
+
+func TestExtractChartDataByPath_PieMultiSeries(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/pie_multi_series.pptx"
+
+	workbookBytes := buildTestXLSX(t)
+	chartXML := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart>
+    <c:plotArea>
+      <c:pieChart>
+        <c:ser>
+          <c:cat><c:strRef><c:f>Sheet1!$A$2:$A$3</c:f></c:strRef></c:cat>
+          <c:val><c:numRef><c:f>Sheet1!$B$2:$B$3</c:f></c:numRef></c:val>
+        </c:ser>
+        <c:ser>
+          <c:cat><c:strRef><c:f>Sheet1!$A$4:$A$5</c:f></c:strRef></c:cat>
+          <c:val><c:numRef><c:f>Sheet1!$B$4:$B$5</c:f></c:numRef></c:val>
+        </c:ser>
+      </c:pieChart>
+    </c:plotArea>
+  </c:chart>
+</c:chartSpace>`)
+
+	parts := map[string][]byte{
+		"[Content_Types].xml": []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+</Types>`),
+		"ppt/slides/slide1.xml":                 []byte("<slide/>"),
+		"ppt/slides/_rels/slide1.xml.rels":      []byte(`<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart" Target="../charts/chart1.xml"/></Relationships>`),
+		"ppt/charts/chart1.xml":                 chartXML,
+		"ppt/charts/_rels/chart1.xml.rels":      []byte(`<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/package" Target="../embeddings/embeddedWorkbook1.xlsx"/></Relationships>`),
+		"ppt/embeddings/embeddedWorkbook1.xlsx": workbookBytes,
+	}
+	if err := writeZipFile(path, parts); err != nil {
+		t.Fatalf("writeZipFile: %v", err)
+	}
+
+	doc, err := OpenFile(path)
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
 	if _, err := doc.ExtractChartDataByPath("ppt/charts/chart1.xml"); err == nil {
 		t.Fatalf("expected ExtractChartDataByPath error")
 	}

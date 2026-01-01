@@ -33,6 +33,10 @@ func Parse(r io.Reader) (*ParsedChart, error) {
 	catDepth := 0
 	valDepth := 0
 	txDepth := 0
+	barDepth := 0
+	lineDepth := 0
+	pieDepth := 0
+	areaDepth := 0
 
 	inFormula := false
 	formulaKind := ""
@@ -52,16 +56,22 @@ func Parse(r io.Reader) (*ParsedChart, error) {
 		case xml.StartElement:
 			switch tok.Name.Local {
 			case "barChart":
-				if out.ChartType == "unknown" {
-					out.ChartType = "bar"
-				}
+				barDepth++
+				out.ChartType = updateChartType(out.ChartType, "bar")
 			case "lineChart":
-				if out.ChartType == "unknown" {
-					out.ChartType = "line"
-				}
+				lineDepth++
+				out.ChartType = updateChartType(out.ChartType, "line")
+			case "pieChart":
+				pieDepth++
+				out.ChartType = updateChartType(out.ChartType, "pie")
+			case "areaChart":
+				areaDepth++
+				out.ChartType = updateChartType(out.ChartType, "area")
 			case "ser":
-				seriesIndex++
-				inSeries = true
+				if barDepth+lineDepth+pieDepth+areaDepth > 0 {
+					seriesIndex++
+					inSeries = true
+				}
 			case "cat":
 				if inSeries {
 					catDepth++
@@ -94,6 +104,22 @@ func Parse(r io.Reader) (*ParsedChart, error) {
 			}
 		case xml.EndElement:
 			switch tok.Name.Local {
+			case "barChart":
+				if barDepth > 0 {
+					barDepth--
+				}
+			case "lineChart":
+				if lineDepth > 0 {
+					lineDepth--
+				}
+			case "pieChart":
+				if pieDepth > 0 {
+					pieDepth--
+				}
+			case "areaChart":
+				if areaDepth > 0 {
+					areaDepth--
+				}
 			case "ser":
 				inSeries = false
 				catDepth = 0
@@ -139,4 +165,14 @@ func Parse(r io.Reader) (*ParsedChart, error) {
 	}
 
 	return out, nil
+}
+
+func updateChartType(current, next string) string {
+	if current == "unknown" {
+		return next
+	}
+	if current == next || current == "mixed" {
+		return current
+	}
+	return "mixed"
 }
