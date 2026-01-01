@@ -935,12 +935,17 @@ func (d *Document) handleChartCacheError(dep ChartDependencies, err error) error
 }
 
 func (d *Document) validateWritableChart(dep ChartDependencies) error {
-	if dep.ChartType == "mixed" || (dep.ChartType != "bar" && dep.ChartType != "line" && dep.ChartType != "pie") {
+	if dep.ChartType == "mixed" || (dep.ChartType != "bar" && dep.ChartType != "line" && dep.ChartType != "pie" && dep.ChartType != "area") {
 		return d.handleChartTypeUnsupported(dep)
 	}
 	if dep.ChartType == "pie" {
 		if code, err := validatePieDependencies(dep); err != nil {
 			return d.handlePieWriteError(dep, code, err)
+		}
+	}
+	if dep.ChartType == "area" {
+		if code, err := validateAreaDependencies(dep); err != nil {
+			return d.handleAreaWriteError(dep, code, err)
 		}
 	}
 	return nil
@@ -993,6 +998,33 @@ func (d *Document) handlePieWriteError(dep ChartDependencies, code string, err e
 	return err
 }
 
+func (d *Document) handleAreaWriteError(dep ChartDependencies, code string, err error) error {
+	if d.opts.Mode != BestEffort {
+		return err
+	}
+
+	message := "Area chart is unsupported; chart is skipped"
+	if code == "WRITE_AREA_MULTIPLE_SERIES_UNSUPPORTED" {
+		message = "Area charts with multiple series are unsupported; chart is skipped"
+	} else if code == "CHART_DEPENDENCIES_PARSE_FAILED" {
+		message = "Failed to extract chart dependencies; chart is skipped"
+	}
+
+	d.addAlert(Alert{
+		Level:   "warn",
+		Code:    code,
+		Message: message,
+		Context: map[string]string{
+			"slide":    dep.SlidePath,
+			"chart":    dep.ChartPath,
+			"workbook": dep.WorkbookPath,
+			"error":    err.Error(),
+		},
+	})
+
+	return err
+}
+
 func validatePieDependencies(dep ChartDependencies) (string, error) {
 	valueSeries := make(map[int]struct{})
 	catSeries := make(map[int]struct{})
@@ -1020,6 +1052,39 @@ func validatePieDependencies(dep ChartDependencies) (string, error) {
 	for idx := range catSeries {
 		if idx != seriesIndex {
 			return "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("pie chart categories/values series mismatch")
+		}
+	}
+
+	return "", nil
+}
+
+func validateAreaDependencies(dep ChartDependencies) (string, error) {
+	valueSeries := make(map[int]struct{})
+	catSeries := make(map[int]struct{})
+
+	for _, r := range dep.Ranges {
+		switch r.Kind {
+		case RangeValues:
+			valueSeries[r.SeriesIndex] = struct{}{}
+		case RangeCategories:
+			catSeries[r.SeriesIndex] = struct{}{}
+		}
+	}
+
+	if len(valueSeries) == 0 || len(catSeries) == 0 {
+		return "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("area chart requires categories and values")
+	}
+	if len(valueSeries) > 1 || len(catSeries) > 1 {
+		return "WRITE_AREA_MULTIPLE_SERIES_UNSUPPORTED", fmt.Errorf("area chart requires exactly one series")
+	}
+
+	seriesIndex := -1
+	for idx := range valueSeries {
+		seriesIndex = idx
+	}
+	for idx := range catSeries {
+		if idx != seriesIndex {
+			return "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("area chart categories/values series mismatch")
 		}
 	}
 

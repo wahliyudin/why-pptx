@@ -173,6 +173,78 @@ func TestSyncCachesPieMultipleSeriesErrors(t *testing.T) {
 	}
 }
 
+func TestSyncCachesAreaSingleSeries(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart>
+    <c:plotArea>
+      <c:areaChart>
+        <c:ser>
+          <c:cat><c:strRef><c:f>Sheet1!$A$2:$A$3</c:f><c:strCache><c:ptCount val="2"/><c:pt idx="0"><c:v>OldA</c:v></c:pt><c:pt idx="1"><c:v>OldB</c:v></c:pt></c:strCache></c:strRef></c:cat>
+          <c:val><c:numRef><c:f>Sheet1!$B$2:$B$3</c:f><c:numCache><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numCache></c:numRef></c:val>
+        </c:ser>
+      </c:areaChart>
+    </c:plotArea>
+  </c:chart>
+</c:chartSpace>`
+
+	deps := Dependencies{
+		ChartType: "area",
+		Ranges: []Range{
+			{Kind: KindCategories, SeriesIndex: 0, Sheet: "Sheet1", StartCell: "A2", EndCell: "A3"},
+			{Kind: KindValues, SeriesIndex: 0, Sheet: "Sheet1", StartCell: "B2", EndCell: "B3"},
+		},
+	}
+
+	out, err := SyncCaches([]byte(xml), deps, func(kind RangeKind, _, _, _ string) ([]string, error) {
+		if kind == KindCategories {
+			return []string{"Cat1", "Cat2"}, nil
+		}
+		return []string{"10", "20"}, nil
+	})
+	if err != nil {
+		t.Fatalf("SyncCaches: %v", err)
+	}
+
+	cats, nums := extractCacheValues(t, out)
+	if len(cats) != 2 || len(nums) != 2 {
+		t.Fatalf("expected cache values, got cats=%v nums=%v", cats, nums)
+	}
+	if cats[0] != "Cat1" || nums[1] != "20" {
+		t.Fatalf("unexpected cache values: cats=%v nums=%v", cats, nums)
+	}
+}
+
+func TestSyncCachesAreaMultipleSeriesErrors(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart>
+    <c:plotArea>
+      <c:areaChart>
+        <c:ser></c:ser>
+        <c:ser></c:ser>
+      </c:areaChart>
+    </c:plotArea>
+  </c:chart>
+</c:chartSpace>`
+
+	deps := Dependencies{
+		ChartType: "area",
+		Ranges: []Range{
+			{Kind: KindCategories, SeriesIndex: 0, Sheet: "Sheet1", StartCell: "A1", EndCell: "A2"},
+			{Kind: KindValues, SeriesIndex: 0, Sheet: "Sheet1", StartCell: "B1", EndCell: "B2"},
+			{Kind: KindValues, SeriesIndex: 1, Sheet: "Sheet1", StartCell: "C1", EndCell: "C2"},
+		},
+	}
+
+	_, err := SyncCaches([]byte(xml), deps, func(_ RangeKind, _, _, _ string) ([]string, error) {
+		return []string{"1", "2"}, nil
+	})
+	if err == nil {
+		t.Fatalf("expected error for area multi-series")
+	}
+}
+
 func extractCacheValues(t *testing.T, data []byte) ([]string, []string) {
 	t.Helper()
 

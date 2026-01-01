@@ -31,7 +31,7 @@ type Dependencies struct {
 type ValueProvider func(kind RangeKind, sheet, start, end string) ([]string, error)
 
 func SyncCaches(chartXML []byte, deps Dependencies, provider ValueProvider) ([]byte, error) {
-	if deps.ChartType != "bar" && deps.ChartType != "line" && deps.ChartType != "pie" {
+	if deps.ChartType != "bar" && deps.ChartType != "line" && deps.ChartType != "pie" && deps.ChartType != "area" {
 		return nil, fmt.Errorf("unsupported chart type %q", deps.ChartType)
 	}
 
@@ -40,16 +40,16 @@ func SyncCaches(chartXML []byte, deps Dependencies, provider ValueProvider) ([]b
 		return nil, err
 	}
 
-	if deps.ChartType == "pie" {
+	if deps.ChartType == "pie" || deps.ChartType == "area" {
 		if len(seriesData) != 1 {
-			return nil, fmt.Errorf("pie chart requires exactly one series")
+			return nil, fmt.Errorf("%s chart requires exactly one series", deps.ChartType)
 		}
 		entry, ok := seriesData[0]
 		if !ok {
-			return nil, fmt.Errorf("pie chart series index must be 0")
+			return nil, fmt.Errorf("%s chart series index must be 0", deps.ChartType)
 		}
 		if entry.categories == nil || entry.values == nil {
-			return nil, fmt.Errorf("pie chart requires categories and values")
+			return nil, fmt.Errorf("%s chart requires categories and values", deps.ChartType)
 		}
 	}
 
@@ -58,6 +58,8 @@ func SyncCaches(chartXML []byte, deps Dependencies, provider ValueProvider) ([]b
 		targetChart = "lineChart"
 	} else if deps.ChartType == "pie" {
 		targetChart = "pieChart"
+	} else if deps.ChartType == "area" {
+		targetChart = "areaChart"
 	}
 
 	decoder := xml.NewDecoder(bytes.NewReader(chartXML))
@@ -205,8 +207,8 @@ func SyncCaches(chartXML []byte, deps Dependencies, provider ValueProvider) ([]b
 	if !foundTarget {
 		return nil, fmt.Errorf("chart type %q not found", deps.ChartType)
 	}
-	if deps.ChartType == "pie" && seriesTotal > 1 {
-		return nil, fmt.Errorf("pie chart requires exactly one series")
+	if (deps.ChartType == "pie" || deps.ChartType == "area") && seriesTotal > 1 {
+		return nil, fmt.Errorf("%s chart requires exactly one series", deps.ChartType)
 	}
 
 	for index := range seriesData {

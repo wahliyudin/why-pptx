@@ -108,7 +108,7 @@ for _, chart := range plan.Charts {
 
 ExtractChartDataByPath reads embedded workbook values without modifying the PPTX.
 Read-only extraction/export supports bar, line, pie, and area charts. The edit
-pipeline supports bar/line and single-series pie charts.
+pipeline supports bar/line and single-series pie/area charts.
 Single-chart extraction returns an error on unsupported input in both modes.
 In BestEffort, use ExtractAllCharts/ExportAllCharts to skip charts with alerts.
 
@@ -198,7 +198,7 @@ doc, err := pptx.OpenFile("in.pptx", pptx.WithOptions(opts))
 
 ## Limitations (v0.3)
 
-- Bar/line charts and single-series pie charts for edits and cache sync.
+- Bar/line charts and single-series pie/area charts for edits and cache sync.
 - Read-only extraction/export supports bar, line, pie, and area.
 - Inline strings only (no sharedStrings).
 - 1D ranges only (no 2D ranges).
