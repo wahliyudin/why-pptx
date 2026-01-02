@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 
+	"why-pptx/internal/chartxml"
 	"why-pptx/internal/overlaystage"
 	"why-pptx/internal/rels"
 )
@@ -640,6 +641,10 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 				return v.mixedCacheError(ctx, chartPath, idx, fmt.Errorf("mixed chart categories/values length mismatch"))
 			}
 		}
+
+		if err := v.checkMixedAxisGroups(ctx, chartPath, data); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -673,6 +678,97 @@ func (v *PostflightValidator) mixedCacheError(ctx ValidateContext, chartPath str
 		extra["seriesIndex"] = fmt.Sprintf("%d", seriesIndex)
 	}
 	return v.wrapError("POSTFLIGHT_CHART_CACHE_INVALID", err, ctx, extra)
+}
+
+func (v *PostflightValidator) checkMixedAxisGroups(ctx ValidateContext, chartPath string, data []byte) error {
+	parsed, err := chartxml.ParseMixed(bytes.NewReader(data))
+	if err != nil {
+		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", err, ctx, map[string]string{
+			"partPath": chartPath,
+		})
+	}
+
+	barPlot, linePlot, err := findMixedPlots(parsed.Plots)
+	if err != nil {
+		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", err, ctx, map[string]string{
+			"partPath": chartPath,
+		})
+	}
+
+	if len(barPlot.AxisIDs) != 2 || len(linePlot.AxisIDs) != 2 {
+		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", fmt.Errorf("mixed chart requires two axis ids per plot"), ctx, map[string]string{
+			"partPath": chartPath,
+		})
+	}
+
+	if equalStrings(barPlot.AxisIDs, linePlot.AxisIDs) {
+		return nil
+	}
+
+	if len(parsed.AxisGroups) != 2 {
+		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", fmt.Errorf("mixed chart requires exactly two axis groups"), ctx, map[string]string{
+			"partPath": chartPath,
+		})
+	}
+
+	barGroup, ok := axisGroupForPlot(barPlot, parsed.AxisGroups)
+	if !ok {
+		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", fmt.Errorf("bar plot axis group not found"), ctx, map[string]string{
+			"partPath": chartPath,
+		})
+	}
+	lineGroup, ok := axisGroupForPlot(linePlot, parsed.AxisGroups)
+	if !ok {
+		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", fmt.Errorf("line plot axis group not found"), ctx, map[string]string{
+			"partPath": chartPath,
+		})
+	}
+
+	if barGroup.CatAxID == lineGroup.CatAxID && barGroup.ValAxID == lineGroup.ValAxID {
+		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", fmt.Errorf("bar and line plots must use different axis groups"), ctx, map[string]string{
+			"partPath": chartPath,
+		})
+	}
+
+	return nil
+}
+
+func findMixedPlots(plots []chartxml.MixedPlot) (chartxml.MixedPlot, chartxml.MixedPlot, error) {
+	var barPlot *chartxml.MixedPlot
+	var linePlot *chartxml.MixedPlot
+	for i := range plots {
+		plot := &plots[i]
+		switch plot.PlotType {
+		case "bar":
+			if barPlot != nil {
+				return chartxml.MixedPlot{}, chartxml.MixedPlot{}, fmt.Errorf("multiple bar plots found")
+			}
+			barPlot = plot
+		case "line":
+			if linePlot != nil {
+				return chartxml.MixedPlot{}, chartxml.MixedPlot{}, fmt.Errorf("multiple line plots found")
+			}
+			linePlot = plot
+		}
+	}
+	if barPlot == nil || linePlot == nil {
+		return chartxml.MixedPlot{}, chartxml.MixedPlot{}, fmt.Errorf("mixed chart requires bar and line plots")
+	}
+	return *barPlot, *linePlot, nil
+}
+
+func axisGroupForPlot(plot chartxml.MixedPlot, groups []chartxml.AxisGroup) (*chartxml.AxisGroup, bool) {
+	if len(plot.AxisIDs) != 2 {
+		return nil, false
+	}
+	for i := range groups {
+		ids := []string{groups[i].CatAxID, groups[i].ValAxID}
+		sort.Strings(ids)
+		if equalStrings(ids, plot.AxisIDs) {
+			return &groups[i], true
+		}
+	}
+	return nil, false
 }
 
 func readPtIndex(attrs []xml.Attr) (int, error) {
@@ -826,6 +922,8 @@ func messageForCode(code string) string {
 		return "Chart cache validation failed"
 	case "POSTFLIGHT_XLSX_CELL_TYPE_MISMATCH":
 		return "Worksheet uses unsupported shared string cell type"
+	case "POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID":
+		return "Mixed chart secondary axis validation failed"
 	default:
 		return "Postflight validation failed"
 	}

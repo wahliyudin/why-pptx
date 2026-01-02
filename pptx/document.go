@@ -85,9 +85,21 @@ type mixedWriteSeries struct {
 	Name        *ChartRange
 }
 
+type mixedAxisGroup struct {
+	CatAxID string
+	ValAxID string
+}
+
+type mixedPlotBinding struct {
+	PlotType  string
+	AxisGroup mixedAxisGroup
+	AxisRole  string
+}
+
 type mixedWriteDeps struct {
 	Categories ChartRange
 	Series     []mixedWriteSeries
+	Bindings   []mixedPlotBinding
 }
 
 type CellValue struct {
@@ -1084,16 +1096,19 @@ func mixedWriteDependenciesFromChart(chartXML []byte) (*mixedWriteDeps, string, 
 	}
 
 	if len(barPlot.AxisIDs) != 2 || len(linePlot.AxisIDs) != 2 {
-		return nil, "WRITE_MIX_UNSUPPORTED_SHAPE", fmt.Errorf("mixed chart requires a shared category/value axis")
-	}
-	if !equalStringSlice(barPlot.AxisIDs, linePlot.AxisIDs) {
-		return nil, "WRITE_MIX_SECONDARY_AXIS_UNSUPPORTED", fmt.Errorf("mixed chart uses secondary axis")
+		return nil, "WRITE_MIX_AXIS_GROUP_INVALID", fmt.Errorf("mixed chart requires exactly two axis ids per plot")
 	}
 
-	for _, series := range parsed.Series {
-		if series.Axis == "secondary" {
-			return nil, "WRITE_MIX_SECONDARY_AXIS_UNSUPPORTED", fmt.Errorf("mixed chart uses secondary axis")
+	usesSecondaryAxis := !equalStringSlice(barPlot.AxisIDs, linePlot.AxisIDs)
+	bindings := make([]mixedPlotBinding, 0, 2)
+	if usesSecondaryAxis {
+		secondaryBindings, err := validateSecondaryAxisGroups(barPlot, linePlot, parsed.AxisGroups)
+		if err != nil {
+			return nil, err.code, err.err
 		}
+		bindings = append(bindings, secondaryBindings...)
+	} else {
+		bindings = append(bindings, buildSingleAxisBindings(barPlot, linePlot, parsed.AxisGroups)...)
 	}
 
 	seriesRanges := make(map[int]*mixedWriteSeries, len(parsed.Series))
@@ -1184,6 +1199,7 @@ func mixedWriteDependenciesFromChart(chartXML []byte) (*mixedWriteDeps, string, 
 	return &mixedWriteDeps{
 		Categories: catRange,
 		Series:     ordered,
+		Bindings:   bindings,
 	}, "", nil
 }
 
@@ -1214,6 +1230,121 @@ func findMixedPlots(plots []chartxml.MixedPlot) (chartxml.MixedPlot, chartxml.Mi
 		return chartxml.MixedPlot{}, chartxml.MixedPlot{}, fmt.Errorf("mixed chart requires exactly two plots")
 	}
 	return *barPlot, *linePlot, nil
+}
+
+type axisValidationError struct {
+	code string
+	err  error
+}
+
+func validateSecondaryAxisGroups(barPlot, linePlot chartxml.MixedPlot, groups []chartxml.AxisGroup) ([]mixedPlotBinding, *axisValidationError) {
+	if len(groups) < 2 {
+		return nil, &axisValidationError{
+			code: "WRITE_MIX_AXIS_GROUP_INVALID",
+			err:  fmt.Errorf("secondary axis requires two axis groups"),
+		}
+	}
+	if len(groups) > 2 {
+		return nil, &axisValidationError{
+			code: "WRITE_MIX_SECONDARY_AXIS_UNSUPPORTED_SHAPE",
+			err:  fmt.Errorf("secondary axis supports exactly two axis groups"),
+		}
+	}
+
+	barGroup, ok := axisGroupForPlot(barPlot, groups)
+	if !ok {
+		return nil, &axisValidationError{
+			code: "WRITE_MIX_AXIS_GROUP_INVALID",
+			err:  fmt.Errorf("bar plot axis group not found"),
+		}
+	}
+	lineGroup, ok := axisGroupForPlot(linePlot, groups)
+	if !ok {
+		return nil, &axisValidationError{
+			code: "WRITE_MIX_AXIS_GROUP_INVALID",
+			err:  fmt.Errorf("line plot axis group not found"),
+		}
+	}
+
+	if barGroup.CatAxID == lineGroup.CatAxID && barGroup.ValAxID == lineGroup.ValAxID {
+		return nil, &axisValidationError{
+			code: "WRITE_MIX_SECONDARY_AXIS_UNSUPPORTED_SHAPE",
+			err:  fmt.Errorf("bar and line plots must use different axis groups"),
+		}
+	}
+
+	barRole, barOK := axisRoleFromGroup(*barGroup)
+	lineRole, lineOK := axisRoleFromGroup(*lineGroup)
+	if !(barOK && lineOK && barRole != lineRole) {
+		barRole = "primary"
+		lineRole = "secondary"
+	}
+
+	return []mixedPlotBinding{
+		{
+			PlotType: "bar",
+			AxisGroup: mixedAxisGroup{
+				CatAxID: barGroup.CatAxID,
+				ValAxID: barGroup.ValAxID,
+			},
+			AxisRole: barRole,
+		},
+		{
+			PlotType: "line",
+			AxisGroup: mixedAxisGroup{
+				CatAxID: lineGroup.CatAxID,
+				ValAxID: lineGroup.ValAxID,
+			},
+			AxisRole: lineRole,
+		},
+	}, nil
+}
+
+func buildSingleAxisBindings(barPlot, linePlot chartxml.MixedPlot, groups []chartxml.AxisGroup) []mixedPlotBinding {
+	role := "primary"
+	group, ok := axisGroupForPlot(barPlot, groups)
+	if ok {
+		if detected, ok := axisRoleFromGroup(*group); ok {
+			role = detected
+		}
+	}
+
+	axisGroup := mixedAxisGroup{}
+	if group != nil {
+		axisGroup = mixedAxisGroup{CatAxID: group.CatAxID, ValAxID: group.ValAxID}
+	}
+
+	return []mixedPlotBinding{
+		{PlotType: "bar", AxisGroup: axisGroup, AxisRole: role},
+		{PlotType: "line", AxisGroup: axisGroup, AxisRole: role},
+	}
+}
+
+func axisGroupForPlot(plot chartxml.MixedPlot, groups []chartxml.AxisGroup) (*chartxml.AxisGroup, bool) {
+	if len(plot.AxisIDs) != 2 {
+		return nil, false
+	}
+	for i := range groups {
+		ids := []string{groups[i].CatAxID, groups[i].ValAxID}
+		sort.Strings(ids)
+		if equalStringSlice(ids, plot.AxisIDs) {
+			return &groups[i], true
+		}
+	}
+	return nil, false
+}
+
+func axisRoleFromGroup(group chartxml.AxisGroup) (string, bool) {
+	switch group.ValAxisPos {
+	case "l", "b":
+		return "primary", true
+	case "r", "t":
+		return "secondary", true
+	}
+	if group.ValHasMajorGridlines || group.ValHasMinorGridlines {
+		return "primary", true
+	}
+	return "", false
 }
 
 func orderMixedSeries(series map[int]*mixedWriteSeries) ([]mixedWriteSeries, error) {
@@ -1402,6 +1533,10 @@ func (d *Document) handleMixedWriteError(dep ChartDependencies, code string, err
 	switch code {
 	case "WRITE_MIX_SECONDARY_AXIS_UNSUPPORTED":
 		message = "Mixed chart uses secondary axis; chart is skipped"
+	case "WRITE_MIX_SECONDARY_AXIS_UNSUPPORTED_SHAPE":
+		message = "Mixed chart secondary axis shape is unsupported; chart is skipped"
+	case "WRITE_MIX_AXIS_GROUP_INVALID":
+		message = "Mixed chart axis groups are invalid; chart is skipped"
 	case "WRITE_MIX_UNSUPPORTED_SHAPE":
 		message = "Mixed chart shape is unsupported; chart is skipped"
 	case "CHART_DEPENDENCIES_PARSE_FAILED":

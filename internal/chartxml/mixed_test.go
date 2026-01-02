@@ -95,6 +95,38 @@ func TestParseMixedUnsupportedPlot(t *testing.T) {
 	}
 }
 
+func TestParseMixedAxisGroups(t *testing.T) {
+	xml := `<?xml version="1.0" encoding="UTF-8"?>
+<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">
+  <c:chart>
+    <c:plotArea>
+      <c:barChart>
+        <c:ser><c:cat><c:strRef><c:f>Sheet1!$A$2:$A$3</c:f></c:strRef></c:cat></c:ser>
+        <c:axId val="1"/>
+        <c:axId val="2"/>
+      </c:barChart>
+      <c:lineChart>
+        <c:ser><c:cat><c:strRef><c:f>Sheet1!$A$2:$A$3</c:f></c:strRef></c:cat></c:ser>
+        <c:axId val="3"/>
+        <c:axId val="4"/>
+      </c:lineChart>
+      <c:catAx><c:axId val="1"/><c:crossAx val="2"/></c:catAx>
+      <c:valAx><c:axId val="2"/><c:crossAx val="1"/><c:axisPos val="l"/></c:valAx>
+      <c:catAx><c:axId val="3"/><c:crossAx val="4"/></c:catAx>
+      <c:valAx><c:axId val="4"/><c:crossAx val="3"/><c:axisPos val="r"/></c:valAx>
+    </c:plotArea>
+  </c:chart>
+</c:chartSpace>`
+
+	mixed, err := ParseMixed(strings.NewReader(xml))
+	if err != nil {
+		t.Fatalf("ParseMixed: %v", err)
+	}
+	if len(mixed.AxisGroups) != 2 {
+		t.Fatalf("expected 2 axis groups, got %d", len(mixed.AxisGroups))
+	}
+}
+
 func TestParseMixedStackedUnsupported(t *testing.T) {
 	xml := `<?xml version="1.0" encoding="UTF-8"?>
 <c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart">

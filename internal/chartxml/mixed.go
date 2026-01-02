@@ -9,11 +9,19 @@ import (
 )
 
 type MixedSeries struct {
-	Index    int
-	PlotType string
+	Index     int
+	PlotType  string
 	PlotIndex int
-	Axis     string
-	Formulas []Formula
+	Axis      string
+	Formulas  []Formula
+}
+
+type AxisGroup struct {
+	CatAxID              string
+	ValAxID              string
+	ValAxisPos           string
+	ValHasMajorGridlines bool
+	ValHasMinorGridlines bool
 }
 
 type MixedPlot struct {
@@ -23,8 +31,9 @@ type MixedPlot struct {
 }
 
 type MixedChart struct {
-	Series []MixedSeries
-	Plots  []MixedPlot
+	Series     []MixedSeries
+	Plots      []MixedPlot
+	AxisGroups []AxisGroup
 }
 
 func ParseMixed(r io.Reader) (*MixedChart, error) {
@@ -36,6 +45,11 @@ func ParseMixed(r io.Reader) (*MixedChart, error) {
 	currentPlot := -1
 	barDepth := 0
 	lineDepth := 0
+
+	axisDepth := 0
+	axisKind := ""
+	currentAxis := axisInfo{}
+	axes := make([]axisInfo, 0)
 
 	seriesIndex := -1
 	serDepth := 0
@@ -74,9 +88,54 @@ func ParseMixed(r io.Reader) (*MixedChart, error) {
 					currentPlot = len(plots) - 1
 					plotTypes["line"] = struct{}{}
 				}
+			case "catAx":
+				axisDepth++
+				if axisDepth == 1 {
+					axisKind = "cat"
+					currentAxis = axisInfo{kind: "cat"}
+				}
+			case "valAx":
+				axisDepth++
+				if axisDepth == 1 {
+					axisKind = "val"
+					currentAxis = axisInfo{kind: "val"}
+				}
 			default:
 				if isUnsupportedPlot(tok.Name.Local) {
 					return nil, fmt.Errorf("unsupported plot type %q", tok.Name.Local)
+				}
+			}
+
+			if axisDepth > 0 {
+				switch tok.Name.Local {
+				case "axId":
+					for _, attr := range tok.Attr {
+						if attr.Name.Local == "val" && currentAxis.id == "" {
+							currentAxis.id = attr.Value
+						}
+					}
+				case "crossAx":
+					for _, attr := range tok.Attr {
+						if attr.Name.Local == "val" {
+							currentAxis.cross = attr.Value
+						}
+					}
+				case "axisPos":
+					if axisKind == "val" {
+						for _, attr := range tok.Attr {
+							if attr.Name.Local == "val" {
+								currentAxis.axisPos = attr.Value
+							}
+						}
+					}
+				case "majorGridlines":
+					if axisKind == "val" {
+						currentAxis.hasMajorGridlines = true
+					}
+				case "minorGridlines":
+					if axisKind == "val" {
+						currentAxis.hasMinorGridlines = true
+					}
 				}
 			}
 
@@ -156,6 +215,17 @@ func ParseMixed(r io.Reader) (*MixedChart, error) {
 				if barDepth == 0 && lineDepth == 0 {
 					currentPlot = -1
 				}
+			case "catAx", "valAx":
+				if axisDepth > 0 {
+					axisDepth--
+				}
+				if axisDepth == 0 {
+					if currentAxis.id != "" {
+						axes = append(axes, currentAxis)
+					}
+					axisKind = ""
+					currentAxis = axisInfo{}
+				}
 			case "ser":
 				if serDepth > 0 {
 					serDepth--
@@ -212,6 +282,7 @@ func ParseMixed(r io.Reader) (*MixedChart, error) {
 
 	assignMixedAxes(out.Series, plots)
 	out.Plots = plotsToMixed(plots)
+	out.AxisGroups = buildAxisGroups(axes)
 
 	return out, nil
 }
@@ -221,6 +292,15 @@ type plotState struct {
 	axisIDs       map[string]struct{}
 	seriesIndices []int
 	seriesCount   int
+}
+
+type axisInfo struct {
+	kind              string
+	id                string
+	cross             string
+	axisPos           string
+	hasMajorGridlines bool
+	hasMinorGridlines bool
 }
 
 func newPlotState(plotType string) *plotState {
@@ -292,6 +372,53 @@ func sortedKeys(values map[string]struct{}) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func buildAxisGroups(axes []axisInfo) []AxisGroup {
+	catAxes := make(map[string]axisInfo)
+	valAxes := make(map[string]axisInfo)
+	for _, axis := range axes {
+		if axis.id == "" {
+			continue
+		}
+		if axis.kind == "cat" {
+			catAxes[axis.id] = axis
+		} else if axis.kind == "val" {
+			valAxes[axis.id] = axis
+		}
+	}
+
+	out := make([]AxisGroup, 0)
+	seen := make(map[string]struct{})
+	for _, cat := range catAxes {
+		if cat.cross == "" {
+			continue
+		}
+		val, ok := valAxes[cat.cross]
+		if !ok || val.cross != cat.id {
+			continue
+		}
+		key := cat.id + "|" + val.id
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, AxisGroup{
+			CatAxID:              cat.id,
+			ValAxID:              val.id,
+			ValAxisPos:           val.axisPos,
+			ValHasMajorGridlines: val.hasMajorGridlines,
+			ValHasMinorGridlines: val.hasMinorGridlines,
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CatAxID == out[j].CatAxID {
+			return out[i].ValAxID < out[j].ValAxID
+		}
+		return out[i].CatAxID < out[j].CatAxID
+	})
+	return out
 }
 
 func isUnsupportedPlot(name string) bool {

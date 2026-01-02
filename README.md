@@ -113,8 +113,8 @@ for _, chart := range plan.Charts {
 ExtractChartDataByPath reads embedded workbook values without modifying the PPTX.
 Read-only extraction/export supports bar, line, pie, area, and bar+line mixed
 charts. The edit pipeline supports bar/line, single-series pie, multi-series
-area (standard grouping, primary axis only), and mixed bar+line charts that
-share a single axis set (no secondary axis).
+area (standard grouping, primary axis only), and mixed bar+line charts with
+primary/secondary axis support (single bar plot + single line plot).
 Single-chart extraction returns an error on unsupported input in both modes.
 In BestEffort, use ExtractAllCharts/ExportAllCharts to skip charts with alerts.
 
@@ -204,7 +204,7 @@ doc, err := pptx.OpenFile("in.pptx", pptx.WithOptions(opts))
 
 ## Limitations (v0.3)
 
-- Bar/line charts, single-series pie, multi-series area (standard grouping, primary axis only), and mixed bar+line charts (single axis only) for edits and cache sync.
+- Bar/line charts, single-series pie, multi-series area (standard grouping, primary axis only), and mixed bar+line charts (single bar plot + single line plot; primary/secondary axis supported) for edits and cache sync.
 - Read-only extraction/export supports bar, line, pie, area, and bar+line mixed charts.
 - Inline strings only (no sharedStrings).
 - 1D ranges only (no 2D ranges).

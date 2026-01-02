@@ -42,7 +42,11 @@ flows; Strict mode generally returns errors instead of recording alerts.
   Context: slide, chart, workbook, error
 - WRITE_MIX_UNSUPPORTED_SHAPE: mixed chart shape is unsupported; chart is skipped.
   Context: slide, chart, workbook, error
-- WRITE_MIX_SECONDARY_AXIS_UNSUPPORTED: mixed chart uses secondary axis; chart is skipped.
+- WRITE_MIX_SECONDARY_AXIS_UNSUPPORTED: legacy (pre-secondary-axis write); retained for compatibility.
+  Context: slide, chart, workbook, error
+- WRITE_MIX_SECONDARY_AXIS_UNSUPPORTED_SHAPE: secondary-axis mixed chart shape is unsupported; chart is skipped.
+  Context: slide, chart, workbook, error
+- WRITE_MIX_AXIS_GROUP_INVALID: mixed chart axis groups are invalid; chart is skipped.
   Context: slide, chart, workbook, error
 
 ## Cache sync
@@ -64,6 +68,8 @@ flows; Strict mode generally returns errors instead of recording alerts.
   Context: relPath, target, chartPath, slidePath, workbookPath, stage, mode
 - POSTFLIGHT_CHART_CACHE_INVALID: chart cache invariants failed.
   Context: chartPath, partPath, seriesIndex, stage, mode
+- POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID: mixed chart secondary axis structure is invalid.
+  Context: chartPath, partPath, stage, mode
 
 ## Read-only extraction
 
