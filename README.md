@@ -1,7 +1,7 @@
 # why-pptx
 
 Small Go library for manipulating PPTX charts and their embedded workbooks.
-V0.3 focuses on bar/line charts, inline strings, and fidelity-preserving ZIP/XML handling.
+v2 focuses on deterministic, no-silent-corruption edits for supported chart types.
 
 ## Basic usage
 
@@ -65,7 +65,7 @@ if err := doc.SaveFile("out.pptx"); err != nil {
 
 For mixed bar+line charts, ApplyChartData uses a deterministic series order:
 all bar series first (by plot order), then line series. Provide `values:0`,
-`values:1`, … in that order.
+`values:1`, etc in that order.
 
 ## List charts by title
 
@@ -202,7 +202,7 @@ doc, err := pptx.OpenFile("in.pptx", pptx.WithOptions(opts))
 
 - `WithBestEffort` is deprecated. Prefer `WithOptions` or `WithErrorMode`.
 
-## Limitations (v0.3)
+## Limitations (v2.0.0)
 
 - Bar/line charts, single-series pie, multi-series area (standard grouping, primary axis only), and mixed bar+line charts (single bar plot + single line plot; primary/secondary axis supported) for edits and cache sync.
 - Read-only extraction/export supports bar, line, pie, area, and bar+line mixed charts.
