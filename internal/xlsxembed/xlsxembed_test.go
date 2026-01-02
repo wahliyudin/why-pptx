@@ -228,6 +228,25 @@ func TestGetRangeValuesMissingNumericZero(t *testing.T) {
 	}
 }
 
+func TestGetRangeValuesInlineStrRichText(t *testing.T) {
+	data := buildTestXLSXInlineStrRich(t)
+	wb, err := Open(data)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	values, err := wb.GetRangeValues("Sheet1", "A1", "B1", MissingNumericEmpty)
+	if err != nil {
+		t.Fatalf("GetRangeValues: %v", err)
+	}
+	if len(values) != 2 {
+		t.Fatalf("expected 2 values, got %d", len(values))
+	}
+	if values[0] != "1" || values[1] != "Hello World" {
+		t.Fatalf("unexpected values: %#v", values)
+	}
+}
+
 func buildTestXLSX(t *testing.T) []byte {
 	t.Helper()
 
@@ -259,6 +278,44 @@ func buildTestXLSX(t *testing.T) []byte {
 		"xl/worksheets/sheet2.xml": []byte(`<?xml version="1.0" encoding="UTF-8"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
   <sheetData>
+  </sheetData>
+</worksheet>`),
+	}
+
+	return writeZip(t, parts)
+}
+
+func buildTestXLSXInlineStrRich(t *testing.T) []byte {
+	t.Helper()
+
+	parts := map[string][]byte{
+		"[Content_Types].xml": []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="xml" ContentType="application/xml"/>
+</Types>`),
+		"xl/workbook.xml": []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Sheet1" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>`),
+		"xl/_rels/workbook.xml.rels": []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>`),
+		"xl/worksheets/sheet1.xml": []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData>
+    <row r="1">
+      <c r="A1"><v>1</v></c>
+      <c r="B1" t="inlineStr">
+        <is>
+          <r><t>Hello</t></r>
+          <r><t xml:space="preserve"> </t></r>
+          <r><t>World</t></r>
+        </is>
+      </c>
+    </row>
   </sheetData>
 </worksheet>`),
 	}

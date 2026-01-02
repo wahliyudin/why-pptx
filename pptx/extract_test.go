@@ -89,6 +89,34 @@ func TestExtractChartDataByPath_LineMultiSeries(t *testing.T) {
 	}
 }
 
+func TestExtractChartDataByPath_LineMissingCachedValues(t *testing.T) {
+	doc, err := OpenFile(fixturePath("line_chart_cached_values_missing.pptx"))
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	data, err := doc.ExtractChartDataByPath("ppt/charts/chart1.xml")
+	if err != nil {
+		t.Fatalf("ExtractChartDataByPath: %v", err)
+	}
+
+	if data.Type != "line" {
+		t.Fatalf("expected line chart, got %q", data.Type)
+	}
+	if !reflect.DeepEqual(data.Labels, []string{"Cat1", "Cat2", "Cat3"}) {
+		t.Fatalf("labels mismatch: %v", data.Labels)
+	}
+	if len(data.Series) != 2 {
+		t.Fatalf("expected 2 series, got %d", len(data.Series))
+	}
+	if !reflect.DeepEqual(data.Series[0].Data, []string{"1", "", "3"}) {
+		t.Fatalf("series 0 data mismatch: %v", data.Series[0].Data)
+	}
+	if !reflect.DeepEqual(data.Series[1].Data, []string{"4", "", "6"}) {
+		t.Fatalf("series 1 data mismatch: %v", data.Series[1].Data)
+	}
+}
+
 func TestExtractChartDataByPath_PieSimple(t *testing.T) {
 	doc, err := OpenFile(fixturePath("pie_simple_embedded.pptx"))
 	if err != nil {
@@ -136,6 +164,25 @@ func TestExtractChartDataByPath_AreaSimple(t *testing.T) {
 	}
 	if !reflect.DeepEqual(data.Series[0].Data, []string{"10", "20"}) {
 		t.Fatalf("series data mismatch: %v", data.Series[0].Data)
+	}
+}
+
+func TestExtractChartDataByPath_InlineStrRichText(t *testing.T) {
+	doc, err := OpenFile(fixturePath("workbook_inlineStr_edgecases.pptx"))
+	if err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	data, err := doc.ExtractChartDataByPath("ppt/charts/chart1.xml")
+	if err != nil {
+		t.Fatalf("ExtractChartDataByPath: %v", err)
+	}
+
+	if data.Type != "bar" {
+		t.Fatalf("expected bar chart, got %q", data.Type)
+	}
+	if !reflect.DeepEqual(data.Labels, []string{"Hello World", "Foo Bar"}) {
+		t.Fatalf("labels mismatch: %v", data.Labels)
 	}
 }
 

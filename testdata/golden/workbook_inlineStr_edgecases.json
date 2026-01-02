@@ -1,0 +1,88 @@
+{
+  "entries": [
+    "[Content_Types].xml",
+    "ppt/charts/_rels/chart1.xml.rels",
+    "ppt/charts/chart1.xml",
+    "ppt/embeddings/embeddedWorkbook1.xlsx",
+    "ppt/slides/_rels/slide1.xml.rels",
+    "ppt/slides/slide1.xml"
+  ],
+  "charts": [
+    {
+      "chartPath": "ppt/charts/chart1.xml",
+      "chartType": "bar",
+      "workbookPath": "ppt/embeddings/embeddedWorkbook1.xlsx",
+      "series": [
+        {
+          "index": 0,
+          "categories": "Sheet1!$A$2:$A$3",
+          "values": "Sheet1!$B$2:$B$3"
+        }
+      ],
+      "cache": {
+        "Series": [
+          {
+            "Kind": "strCache",
+            "SeriesIndex": 0,
+            "PtCount": 2,
+            "Points": [
+              {
+                "Idx": 0,
+                "Value": "Old1"
+              },
+              {
+                "Idx": 1,
+                "Value": "Old2"
+              }
+            ]
+          },
+          {
+            "Kind": "numCache",
+            "SeriesIndex": 0,
+            "PtCount": 2,
+            "Points": [
+              {
+                "Idx": 0,
+                "Value": "10"
+              },
+              {
+                "Idx": 1,
+                "Value": "20"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "workbooks": [
+    {
+      "workbookPath": "ppt/embeddings/embeddedWorkbook1.xlsx",
+      "sharedStringsPart": false,
+      "sharedStringCells": false,
+      "sheets": [
+        {
+          "sheet": "Sheet1",
+          "cells": [
+            {
+              "ref": "A2",
+              "value": "Hello World"
+            },
+            {
+              "ref": "A3",
+              "value": "Foo Bar"
+            },
+            {
+              "ref": "B2",
+              "value": "10"
+            },
+            {
+              "ref": "B3",
+              "value": "20"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

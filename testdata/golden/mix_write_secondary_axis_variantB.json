@@ -1,0 +1,214 @@
+{
+  "entries": [
+    "[Content_Types].xml",
+    "ppt/charts/_rels/chart1.xml.rels",
+    "ppt/charts/chart1.xml",
+    "ppt/embeddings/embeddedWorkbook1.xlsx",
+    "ppt/slides/_rels/slide1.xml.rels",
+    "ppt/slides/slide1.xml"
+  ],
+  "charts": [
+    {
+      "chartPath": "ppt/charts/chart1.xml",
+      "chartType": "mixed",
+      "workbookPath": "ppt/embeddings/embeddedWorkbook1.xlsx",
+      "plots": [
+        {
+          "plotType": "bar",
+          "axisIds": [
+            "1",
+            "2"
+          ],
+          "axisRole": "primary",
+          "seriesCount": 2
+        },
+        {
+          "plotType": "line",
+          "axisIds": [
+            "3",
+            "4"
+          ],
+          "axisRole": "secondary",
+          "seriesCount": 1
+        }
+      ],
+      "axisGroups": [
+        {
+          "catAxId": "1",
+          "valAxId": "2",
+          "valAxisPos": "l",
+          "valHasMajorGridlines": true
+        },
+        {
+          "catAxId": "3",
+          "valAxId": "4",
+          "valAxisPos": "r"
+        }
+      ],
+      "series": [
+        {
+          "index": 0,
+          "plotType": "bar",
+          "axis": "primary",
+          "categories": "Sheet1!$A$2:$A$3",
+          "values": "Sheet1!$B$2:$B$3"
+        },
+        {
+          "index": 1,
+          "plotType": "bar",
+          "plotIndex": 1,
+          "axis": "primary",
+          "categories": "Sheet1!$A$2:$A$3",
+          "values": "Sheet1!$D$2:$D$3"
+        },
+        {
+          "index": 2,
+          "plotType": "line",
+          "axis": "secondary",
+          "categories": "Sheet1!$A$2:$A$3",
+          "values": "Sheet1!$C$2:$C$3"
+        }
+      ],
+      "cache": {
+        "Series": [
+          {
+            "Kind": "strCache",
+            "SeriesIndex": 0,
+            "PtCount": 2,
+            "Points": [
+              {
+                "Idx": 0,
+                "Value": "Cat1"
+              },
+              {
+                "Idx": 1,
+                "Value": "Cat2"
+              }
+            ]
+          },
+          {
+            "Kind": "numCache",
+            "SeriesIndex": 0,
+            "PtCount": 2,
+            "Points": [
+              {
+                "Idx": 0,
+                "Value": "10"
+              },
+              {
+                "Idx": 1,
+                "Value": "20"
+              }
+            ]
+          },
+          {
+            "Kind": "strCache",
+            "SeriesIndex": 1,
+            "PtCount": 2,
+            "Points": [
+              {
+                "Idx": 0,
+                "Value": "Cat1"
+              },
+              {
+                "Idx": 1,
+                "Value": "Cat2"
+              }
+            ]
+          },
+          {
+            "Kind": "numCache",
+            "SeriesIndex": 1,
+            "PtCount": 2,
+            "Points": [
+              {
+                "Idx": 0,
+                "Value": "50"
+              },
+              {
+                "Idx": 1,
+                "Value": "60"
+              }
+            ]
+          },
+          {
+            "Kind": "strCache",
+            "SeriesIndex": 2,
+            "PtCount": 2,
+            "Points": [
+              {
+                "Idx": 0,
+                "Value": "Cat1"
+              },
+              {
+                "Idx": 1,
+                "Value": "Cat2"
+              }
+            ]
+          },
+          {
+            "Kind": "numCache",
+            "SeriesIndex": 2,
+            "PtCount": 2,
+            "Points": [
+              {
+                "Idx": 0,
+                "Value": "30"
+              },
+              {
+                "Idx": 1,
+                "Value": "40"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "workbooks": [
+    {
+      "workbookPath": "ppt/embeddings/embeddedWorkbook1.xlsx",
+      "sharedStringsPart": false,
+      "sharedStringCells": false,
+      "sheets": [
+        {
+          "sheet": "Sheet1",
+          "cells": [
+            {
+              "ref": "A2",
+              "value": "Cat1"
+            },
+            {
+              "ref": "A3",
+              "value": "Cat2"
+            },
+            {
+              "ref": "B2",
+              "value": "10"
+            },
+            {
+              "ref": "B3",
+              "value": "20"
+            },
+            {
+              "ref": "C2",
+              "value": "30"
+            },
+            {
+              "ref": "C3",
+              "value": "40"
+            },
+            {
+              "ref": "D2",
+              "value": "50"
+            },
+            {
+              "ref": "D3",
+              "value": "60"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

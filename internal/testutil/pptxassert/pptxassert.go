@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -611,7 +612,9 @@ func readCellValues(r io.Reader, targets map[string]struct{}) (map[string]string
 	var inCell bool
 	var cellRef string
 	var cellType string
+	var inInlineStr bool
 	var inValue bool
+	var hasValue bool
 	var valueBuf strings.Builder
 
 	for {
@@ -630,6 +633,8 @@ func readCellValues(r io.Reader, targets map[string]struct{}) (map[string]string
 				cellRef = ""
 				cellType = ""
 				inCell = false
+				inInlineStr = false
+				hasValue = false
 				for _, attr := range tok.Attr {
 					if attr.Name.Local == "r" {
 						cellRef = attr.Value
@@ -643,6 +648,10 @@ func readCellValues(r io.Reader, targets map[string]struct{}) (map[string]string
 						if _, ok := targets[normalized]; ok {
 							cellRef = normalized
 							inCell = true
+							valueBuf.Reset()
+							if cellType == "inlineStr" {
+								inInlineStr = true
+							}
 						}
 					}
 				}
@@ -650,28 +659,33 @@ func readCellValues(r io.Reader, targets map[string]struct{}) (map[string]string
 				if inCell && (cellType == "" || cellType == "n") {
 					inValue = true
 					valueBuf.Reset()
+					hasValue = true
 				}
 			case "t":
-				if inCell && cellType == "inlineStr" {
+				if inInlineStr {
 					inValue = true
-					valueBuf.Reset()
+					hasValue = true
 				}
 			}
 		case xml.EndElement:
 			switch tok.Name.Local {
 			case "c":
 				if inCell {
-					val := valueBuf.String()
-					if cellType == "" || cellType == "n" {
-						val = strings.TrimSpace(val)
+					if cellType == "inlineStr" {
+						values[cellRef] = valueBuf.String()
+					} else if hasValue {
+						values[cellRef] = strings.TrimSpace(valueBuf.String())
 					}
-					values[cellRef] = val
 				}
 				inCell = false
+				inInlineStr = false
 				inValue = false
+				hasValue = false
 				cellRef = ""
 				cellType = ""
-			case "v", "t":
+			case "v":
+				inValue = false
+			case "t":
 				inValue = false
 			}
 		case xml.CharData:
@@ -689,6 +703,8 @@ func readCellValues(r io.Reader, targets map[string]struct{}) (map[string]string
 
 	return values, nil
 }
+
+var errSharedStringCell = errors.New("shared string cell detected")
 
 func scanSharedStringCells(r io.Reader) error {
 	decoder := xml.NewDecoder(r)
@@ -708,7 +724,7 @@ func scanSharedStringCells(r io.Reader) error {
 
 		for _, attr := range start.Attr {
 			if attr.Name.Local == "t" && attr.Value == "s" {
-				return fmt.Errorf("shared string cell detected")
+				return errSharedStringCell
 			}
 		}
 	}

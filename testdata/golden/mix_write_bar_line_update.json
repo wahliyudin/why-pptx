@@ -1,0 +1,155 @@
+{
+  "entries": [
+    "[Content_Types].xml",
+    "ppt/charts/_rels/chart1.xml.rels",
+    "ppt/charts/chart1.xml",
+    "ppt/embeddings/embeddedWorkbook1.xlsx",
+    "ppt/slides/_rels/slide1.xml.rels",
+    "ppt/slides/slide1.xml"
+  ],
+  "charts": [
+    {
+      "chartPath": "ppt/charts/chart1.xml",
+      "chartType": "mixed",
+      "workbookPath": "ppt/embeddings/embeddedWorkbook1.xlsx",
+      "plots": [
+        {
+          "plotType": "bar",
+          "axisIds": [
+            "1",
+            "2"
+          ],
+          "axisRole": "primary",
+          "seriesCount": 1
+        },
+        {
+          "plotType": "line",
+          "axisIds": [
+            "1",
+            "2"
+          ],
+          "axisRole": "primary",
+          "seriesCount": 1
+        }
+      ],
+      "series": [
+        {
+          "index": 0,
+          "plotType": "bar",
+          "axis": "primary",
+          "categories": "Sheet1!$A$2:$A$3",
+          "values": "Sheet1!$B$2:$B$3"
+        },
+        {
+          "index": 1,
+          "plotType": "line",
+          "axis": "primary",
+          "categories": "Sheet1!$A$2:$A$3",
+          "values": "Sheet1!$C$2:$C$3"
+        }
+      ],
+      "cache": {
+        "Series": [
+          {
+            "Kind": "strCache",
+            "SeriesIndex": 0,
+            "PtCount": 2,
+            "Points": [
+              {
+                "Idx": 0,
+                "Value": "CatA"
+              },
+              {
+                "Idx": 1,
+                "Value": "CatB"
+              }
+            ]
+          },
+          {
+            "Kind": "numCache",
+            "SeriesIndex": 0,
+            "PtCount": 2,
+            "Points": [
+              {
+                "Idx": 0,
+                "Value": "11"
+              },
+              {
+                "Idx": 1,
+                "Value": "22"
+              }
+            ]
+          },
+          {
+            "Kind": "strCache",
+            "SeriesIndex": 1,
+            "PtCount": 2,
+            "Points": [
+              {
+                "Idx": 0,
+                "Value": "CatA"
+              },
+              {
+                "Idx": 1,
+                "Value": "CatB"
+              }
+            ]
+          },
+          {
+            "Kind": "numCache",
+            "SeriesIndex": 1,
+            "PtCount": 2,
+            "Points": [
+              {
+                "Idx": 0,
+                "Value": "33"
+              },
+              {
+                "Idx": 1,
+                "Value": "44"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "workbooks": [
+    {
+      "workbookPath": "ppt/embeddings/embeddedWorkbook1.xlsx",
+      "sharedStringsPart": false,
+      "sharedStringCells": false,
+      "sheets": [
+        {
+          "sheet": "Sheet1",
+          "cells": [
+            {
+              "ref": "A2",
+              "value": "CatA"
+            },
+            {
+              "ref": "A3",
+              "value": "CatB"
+            },
+            {
+              "ref": "B2",
+              "value": "11"
+            },
+            {
+              "ref": "B3",
+              "value": "22"
+            },
+            {
+              "ref": "C2",
+              "value": "33"
+            },
+            {
+              "ref": "C3",
+              "value": "44"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

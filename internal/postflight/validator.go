@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"why-pptx/internal/chartxml"
+	"why-pptx/internal/errwrap"
 	"why-pptx/internal/overlaystage"
 	"why-pptx/internal/rels"
 )
@@ -372,6 +373,7 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 	txDepth := 0
 	barDepth := 0
 	lineDepth := 0
+	pieDepth := 0
 	currentPlotType := ""
 	areaDepth := 0
 	areaSeries := make(map[int]struct{})
@@ -382,6 +384,9 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 	mixedSeries := make(map[int]struct{})
 	mixedCategories := make(map[int][]string)
 	mixedValueCounts := make(map[int]int)
+	baseSeries := make(map[int]struct{})
+	baseCategories := make(map[int]struct{})
+	baseValues := make(map[int]struct{})
 	var cache *cacheState
 
 	for {
@@ -402,6 +407,8 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 				barDepth++
 			case "lineChart":
 				lineDepth++
+			case "pieChart":
+				pieDepth++
 			case "areaChart":
 				areaDepth++
 			case "ser":
@@ -418,6 +425,9 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 						mixedSeries[currentSeries] = struct{}{}
 					} else {
 						currentPlotType = ""
+					}
+					if barDepth > 0 || lineDepth > 0 || pieDepth > 0 {
+						baseSeries[currentSeries] = struct{}{}
 					}
 					if areaDepth > 0 {
 						areaSeries[currentSeries] = struct{}{}
@@ -501,6 +511,10 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 				if lineDepth > 0 {
 					lineDepth--
 				}
+			case "pieChart":
+				if pieDepth > 0 {
+					pieDepth--
+				}
 			case "areaChart":
 				if areaDepth > 0 {
 					areaDepth--
@@ -577,6 +591,13 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 							mixedValueCounts[cache.seriesIndex] = cache.ptCount
 						}
 					}
+					if _, ok := baseSeries[cache.seriesIndex]; ok {
+						if cache.role == "categories" {
+							baseCategories[cache.seriesIndex] = struct{}{}
+						} else if cache.role == "values" {
+							baseValues[cache.seriesIndex] = struct{}{}
+						}
+					}
 					cache = nil
 				}
 			}
@@ -647,6 +668,17 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 		}
 	}
 
+	if len(baseSeries) > 0 && !(hasBarSeries && hasLineSeries) && len(areaSeries) == 0 {
+		for idx := range baseSeries {
+			if _, ok := baseCategories[idx]; !ok {
+				return v.cacheError(ctx, chartPath, &cacheState{seriesIndex: idx}, fmt.Errorf("missing categories cache for series %d", idx))
+			}
+			if _, ok := baseValues[idx]; !ok {
+				return v.cacheError(ctx, chartPath, &cacheState{seriesIndex: idx}, fmt.Errorf("missing values cache for series %d", idx))
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -683,20 +715,20 @@ func (v *PostflightValidator) mixedCacheError(ctx ValidateContext, chartPath str
 func (v *PostflightValidator) checkMixedAxisGroups(ctx ValidateContext, chartPath string, data []byte) error {
 	parsed, err := chartxml.ParseMixed(bytes.NewReader(data))
 	if err != nil {
-		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", err, ctx, map[string]string{
+		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", errwrap.WrapOp("postflight: mixed-axis", err), ctx, map[string]string{
 			"partPath": chartPath,
 		})
 	}
 
 	barPlot, linePlot, err := findMixedPlots(parsed.Plots)
 	if err != nil {
-		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", err, ctx, map[string]string{
+		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", errwrap.WrapOp("postflight: mixed-axis", err), ctx, map[string]string{
 			"partPath": chartPath,
 		})
 	}
 
 	if len(barPlot.AxisIDs) != 2 || len(linePlot.AxisIDs) != 2 {
-		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", fmt.Errorf("mixed chart requires two axis ids per plot"), ctx, map[string]string{
+		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", errwrap.WrapOp("postflight: mixed-axis", fmt.Errorf("mixed chart requires two axis ids per plot")), ctx, map[string]string{
 			"partPath": chartPath,
 		})
 	}
@@ -706,26 +738,26 @@ func (v *PostflightValidator) checkMixedAxisGroups(ctx ValidateContext, chartPat
 	}
 
 	if len(parsed.AxisGroups) != 2 {
-		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", fmt.Errorf("mixed chart requires exactly two axis groups"), ctx, map[string]string{
+		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", errwrap.WrapOp("postflight: mixed-axis", fmt.Errorf("mixed chart requires exactly two axis groups")), ctx, map[string]string{
 			"partPath": chartPath,
 		})
 	}
 
 	barGroup, ok := axisGroupForPlot(barPlot, parsed.AxisGroups)
 	if !ok {
-		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", fmt.Errorf("bar plot axis group not found"), ctx, map[string]string{
+		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", errwrap.WrapOp("postflight: mixed-axis", fmt.Errorf("bar plot axis group not found")), ctx, map[string]string{
 			"partPath": chartPath,
 		})
 	}
 	lineGroup, ok := axisGroupForPlot(linePlot, parsed.AxisGroups)
 	if !ok {
-		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", fmt.Errorf("line plot axis group not found"), ctx, map[string]string{
+		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", errwrap.WrapOp("postflight: mixed-axis", fmt.Errorf("line plot axis group not found")), ctx, map[string]string{
 			"partPath": chartPath,
 		})
 	}
 
 	if barGroup.CatAxID == lineGroup.CatAxID && barGroup.ValAxID == lineGroup.ValAxID {
-		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", fmt.Errorf("bar and line plots must use different axis groups"), ctx, map[string]string{
+		return v.wrapError("POSTFLIGHT_MIX_SECONDARY_AXIS_INVALID", errwrap.WrapOp("postflight: mixed-axis", fmt.Errorf("bar and line plots must use different axis groups")), ctx, map[string]string{
 			"partPath": chartPath,
 		})
 	}

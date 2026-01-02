@@ -2,5 +2,8 @@ temp_extract/
 docs/
 testdata/*
 !testdata/README.md
+!testdata/alert_codes_baseline.txt
 !testdata/pptx/
 !testdata/pptx/**
+!testdata/golden/
+!testdata/golden/**

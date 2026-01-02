@@ -584,7 +584,9 @@ func readCellValues(data []byte, targets map[string]struct{}, policy MissingNume
 	var inCell bool
 	var cellRef string
 	var cellType string
+	var inInlineStr bool
 	var inValue bool
+	var hasValue bool
 	var valueBuf strings.Builder
 
 	for {
@@ -603,6 +605,8 @@ func readCellValues(data []byte, targets map[string]struct{}, policy MissingNume
 				cellRef = ""
 				cellType = ""
 				inCell = false
+				inInlineStr = false
+				hasValue = false
 				for _, attr := range tok.Attr {
 					if attr.Name.Local == "r" {
 						cellRef = attr.Value
@@ -619,6 +623,10 @@ func readCellValues(data []byte, targets map[string]struct{}, policy MissingNume
 							}
 							cellRef = normalized
 							inCell = true
+							valueBuf.Reset()
+							if cellType == "inlineStr" {
+								inInlineStr = true
+							}
 						}
 					}
 				}
@@ -626,28 +634,33 @@ func readCellValues(data []byte, targets map[string]struct{}, policy MissingNume
 				if inCell && (cellType == "" || cellType == "n") {
 					inValue = true
 					valueBuf.Reset()
+					hasValue = true
 				}
 			case "t":
-				if inCell && cellType == "inlineStr" {
+				if inInlineStr {
 					inValue = true
-					valueBuf.Reset()
+					hasValue = true
 				}
 			}
 		case xml.EndElement:
 			switch tok.Name.Local {
 			case "c":
 				if inCell {
-					val := valueBuf.String()
-					if cellType == "" || cellType == "n" {
-						val = strings.TrimSpace(val)
+					if cellType == "inlineStr" {
+						values[cellRef] = valueBuf.String()
+					} else if hasValue {
+						values[cellRef] = strings.TrimSpace(valueBuf.String())
 					}
-					values[cellRef] = val
 				}
 				inCell = false
+				inInlineStr = false
 				inValue = false
+				hasValue = false
 				cellRef = ""
 				cellType = ""
-			case "v", "t":
+			case "v":
+				inValue = false
+			case "t":
 				inValue = false
 			}
 		case xml.CharData:
