@@ -26,3 +26,7 @@ Fixtures under `testdata/pptx/` are minimal PPTX ZIPs used for structural regres
 - `mix_bar_line_simple.pptx`: Mixed bar+line chart with shared categories; embedded workbook.
 - `mix_bar_line_secondary_axis.pptx`: Mixed bar+line chart with secondary axis IDs; used to validate axis detection.
 - `mix_unsupported_variant.pptx`: Mixed chart including an unsupported plot type; extraction should skip or error.
+- `mix_write_bar_line_valid.pptx`: Mixed bar+line chart with shared axes; used for write-path edits.
+- `mix_write_secondary_axis.pptx`: Mixed bar+line chart with secondary axis IDs; used for write-path rejection.
+- `mix_write_mismatched_categories.pptx`: Mixed bar+line chart with mismatched category ranges; used for write-path rejection.
+- `mix_write_cache_invalid.pptx`: Mixed bar+line chart with invalid cache (ptCount mismatch); used for postflight rejection.

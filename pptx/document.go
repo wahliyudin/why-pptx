@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -73,6 +74,20 @@ type ChartDependencies struct {
 	WorkbookPath string
 	ChartType    string
 	Ranges       []ChartRange
+}
+
+type mixedWriteSeries struct {
+	SeriesIndex int
+	PlotIndex   int
+	PlotType    string
+	Categories  ChartRange
+	Values      ChartRange
+	Name        *ChartRange
+}
+
+type mixedWriteDeps struct {
+	Categories ChartRange
+	Series     []mixedWriteSeries
 }
 
 type CellValue struct {
@@ -508,6 +523,9 @@ func (d *Document) SyncChartCaches() error {
 
 		ctx := d.validateContext(dep)
 		err := d.withChartStage(ctx, func(stage overlaystage.Overlay) error {
+			if dep.ChartType == "mixed" {
+				return d.syncMixedChartCacheInOverlay(stage, dep)
+			}
 			return d.syncChartCacheInOverlay(stage, dep)
 		})
 		if err != nil {
@@ -541,6 +559,9 @@ func (d *Document) ApplyChartData(chartIndex int, data map[string][]string) erro
 	}
 
 	dep := deps[chartIndex]
+	if dep.ChartType == "mixed" {
+		return d.applyMixedChartData(chartIndex, dep, data)
+	}
 	if err := d.validateWritableChart(dep); err != nil {
 		return err
 	}
@@ -624,6 +645,90 @@ func (d *Document) ApplyChartData(chartIndex int, data map[string][]string) erro
 		}
 		if d.opts.Chart.CacheSync {
 			return d.syncChartCacheInOverlay(stage, dep)
+		}
+		return nil
+	})
+}
+
+func (d *Document) applyMixedChartData(chartIndex int, dep ChartDependencies, data map[string][]string) error {
+	mixedDeps, code, err := d.mixedWriteDependencies(dep)
+	if err != nil {
+		return d.handleMixedWriteError(dep, code, err)
+	}
+
+	categories, hasCategories := data["categories"]
+	if !hasCategories {
+		return fmt.Errorf("categories data is required")
+	}
+
+	valuesBySeries := make([][]string, len(mixedDeps.Series))
+	for i := range mixedDeps.Series {
+		key := fmt.Sprintf("values:%d", i)
+		values, ok := data[key]
+		if !ok {
+			return fmt.Errorf("values data missing for series %d", i)
+		}
+		if len(values) != len(categories) {
+			if err := d.handleChartDataMismatch(chartIndex, len(categories), len(values), i); err != nil {
+				return err
+			}
+			return nil
+		}
+		valuesBySeries[i] = values
+	}
+
+	updates := make([]CellUpdate, 0)
+	catCells, err := expandRangeCells(mixedDeps.Categories.StartCell, mixedDeps.Categories.EndCell)
+	if err != nil {
+		return err
+	}
+	if len(categories) != len(catCells) {
+		return fmt.Errorf("categories length mismatch: expected %d got %d", len(catCells), len(categories))
+	}
+	for i, cell := range catCells {
+		updates = append(updates, CellUpdate{
+			WorkbookPath: dep.WorkbookPath,
+			Sheet:        mixedDeps.Categories.Sheet,
+			Cell:         cell,
+			Value:        Str(categories[i]),
+		})
+	}
+
+	for i, series := range mixedDeps.Series {
+		values := valuesBySeries[i]
+		cells, err := expandRangeCells(series.Values.StartCell, series.Values.EndCell)
+		if err != nil {
+			return err
+		}
+		if len(values) != len(cells) {
+			return fmt.Errorf("values length mismatch for series %d: expected %d got %d", i, len(cells), len(values))
+		}
+		for j, cell := range cells {
+			value := strings.TrimSpace(values[j])
+			number, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				return fmt.Errorf("invalid numeric value %q for series %d", values[j], i)
+			}
+			updates = append(updates, CellUpdate{
+				WorkbookPath: dep.WorkbookPath,
+				Sheet:        series.Values.Sheet,
+				Cell:         cell,
+				Value:        Num(number),
+			})
+		}
+	}
+
+	if len(updates) == 0 {
+		return fmt.Errorf("no chart ranges matched")
+	}
+
+	ctx := d.validateContext(dep)
+	return d.withChartStage(ctx, func(stage overlaystage.Overlay) error {
+		if err := d.setWorkbookCellsInOverlay(stage, updates); err != nil {
+			return err
+		}
+		if d.opts.Chart.CacheSync {
+			return d.syncMixedChartCacheInOverlay(stage, dep)
 		}
 		return nil
 	})
@@ -856,6 +961,308 @@ func (d *Document) syncChartCacheInOverlay(overlay overlaystage.Overlay, dep Cha
 	return nil
 }
 
+func (d *Document) syncMixedChartCacheInOverlay(overlay overlaystage.Overlay, dep ChartDependencies) error {
+	if overlay == nil {
+		return fmt.Errorf("overlay not initialized")
+	}
+
+	chartData, err := overlay.Get(dep.ChartPath)
+	if err != nil {
+		return fmt.Errorf("read chart %q: %w", dep.ChartPath, err)
+	}
+
+	wbData, err := overlay.Get(dep.WorkbookPath)
+	if err != nil {
+		return fmt.Errorf("read workbook %q: %w", dep.WorkbookPath, err)
+	}
+
+	wb, err := xlsxembed.Open(wbData)
+	if err != nil {
+		return fmt.Errorf("open workbook %q: %w", dep.WorkbookPath, err)
+	}
+
+	mixedDeps, _, err := mixedWriteDependenciesFromChart(chartData)
+	if err != nil {
+		return err
+	}
+
+	barRanges := make([]chartcache.Range, 0)
+	lineRanges := make([]chartcache.Range, 0)
+	for _, series := range mixedDeps.Series {
+		target := &barRanges
+		if series.PlotType == "line" {
+			target = &lineRanges
+		}
+		*target = append(*target, chartcache.Range{
+			Kind:        chartcache.KindCategories,
+			SeriesIndex: series.PlotIndex,
+			Sheet:       series.Categories.Sheet,
+			StartCell:   series.Categories.StartCell,
+			EndCell:     series.Categories.EndCell,
+		})
+		*target = append(*target, chartcache.Range{
+			Kind:        chartcache.KindValues,
+			SeriesIndex: series.PlotIndex,
+			Sheet:       series.Values.Sheet,
+			StartCell:   series.Values.StartCell,
+			EndCell:     series.Values.EndCell,
+		})
+		if series.Name != nil {
+			*target = append(*target, chartcache.Range{
+				Kind:        chartcache.KindSeriesName,
+				SeriesIndex: series.PlotIndex,
+				Sheet:       series.Name.Sheet,
+				StartCell:   series.Name.StartCell,
+				EndCell:     series.Name.EndCell,
+			})
+		}
+	}
+
+	if len(barRanges) == 0 || len(lineRanges) == 0 {
+		return fmt.Errorf("mixed chart requires bar and line series")
+	}
+
+	provider := func(kind chartcache.RangeKind, sheet, start, end string) ([]string, error) {
+		policy := xlsxembed.MissingNumericEmpty
+		if kind == chartcache.KindValues {
+			policy = xlsxembed.MissingNumericPolicy(d.opts.Workbook.MissingNumericPolicy)
+		}
+		return wb.GetRangeValues(sheet, start, end, policy)
+	}
+
+	updated, err := chartcache.SyncCaches(chartData, chartcache.Dependencies{
+		ChartType: "bar",
+		Ranges:    barRanges,
+	}, provider)
+	if err != nil {
+		return err
+	}
+
+	updated, err = chartcache.SyncCaches(updated, chartcache.Dependencies{
+		ChartType: "line",
+		Ranges:    lineRanges,
+	}, provider)
+	if err != nil {
+		return err
+	}
+
+	if err := overlay.Set(dep.ChartPath, updated); err != nil {
+		return fmt.Errorf("write chart %q: %w", dep.ChartPath, err)
+	}
+	return nil
+}
+
+func (d *Document) mixedWriteDependencies(dep ChartDependencies) (*mixedWriteDeps, string, error) {
+	if d == nil || d.pkg == nil {
+		return nil, "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("document not initialized")
+	}
+
+	data, err := d.pkg.ReadPart(dep.ChartPath)
+	if err != nil {
+		return nil, "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("read chart %q: %w", dep.ChartPath, err)
+	}
+
+	return mixedWriteDependenciesFromChart(data)
+}
+
+func mixedWriteDependenciesFromChart(chartXML []byte) (*mixedWriteDeps, string, error) {
+	parsed, err := chartxml.ParseMixed(bytes.NewReader(chartXML))
+	if err != nil {
+		code := "WRITE_MIX_UNSUPPORTED_SHAPE"
+		if strings.Contains(err.Error(), "parse mixed chart") {
+			code = "CHART_DEPENDENCIES_PARSE_FAILED"
+		}
+		return nil, code, err
+	}
+	if len(parsed.Series) == 0 {
+		return nil, "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("mixed chart has no series")
+	}
+
+	barPlot, linePlot, err := findMixedPlots(parsed.Plots)
+	if err != nil {
+		return nil, "WRITE_MIX_UNSUPPORTED_SHAPE", err
+	}
+
+	if len(barPlot.AxisIDs) != 2 || len(linePlot.AxisIDs) != 2 {
+		return nil, "WRITE_MIX_UNSUPPORTED_SHAPE", fmt.Errorf("mixed chart requires a shared category/value axis")
+	}
+	if !equalStringSlice(barPlot.AxisIDs, linePlot.AxisIDs) {
+		return nil, "WRITE_MIX_SECONDARY_AXIS_UNSUPPORTED", fmt.Errorf("mixed chart uses secondary axis")
+	}
+
+	for _, series := range parsed.Series {
+		if series.Axis == "secondary" {
+			return nil, "WRITE_MIX_SECONDARY_AXIS_UNSUPPORTED", fmt.Errorf("mixed chart uses secondary axis")
+		}
+	}
+
+	seriesRanges := make(map[int]*mixedWriteSeries, len(parsed.Series))
+	for _, series := range parsed.Series {
+		if series.PlotType != "bar" && series.PlotType != "line" {
+			return nil, "WRITE_MIX_UNSUPPORTED_SHAPE", fmt.Errorf("unsupported plot type %q", series.PlotType)
+		}
+		entry := seriesRanges[series.Index]
+		if entry == nil {
+			entry = &mixedWriteSeries{
+				SeriesIndex: series.Index,
+				PlotIndex:   series.PlotIndex,
+				PlotType:    series.PlotType,
+			}
+			seriesRanges[series.Index] = entry
+		}
+		if entry.PlotType != series.PlotType {
+			return nil, "WRITE_MIX_UNSUPPORTED_SHAPE", fmt.Errorf("series %d plot type mismatch", series.Index)
+		}
+		if entry.PlotIndex != series.PlotIndex {
+			return nil, "WRITE_MIX_UNSUPPORTED_SHAPE", fmt.Errorf("series %d plot index mismatch", series.Index)
+		}
+
+		for _, formula := range series.Formulas {
+			ref, err := xlref.ParseA1Range(formula.Formula)
+			if err != nil {
+				return nil, "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("parse chart formula %q: %w", formula.Formula, err)
+			}
+
+			r := ChartRange{
+				Kind:        ChartRangeKind(formula.Kind),
+				SeriesIndex: series.Index,
+				Sheet:       ref.Sheet,
+				StartCell:   ref.StartCell,
+				EndCell:     ref.EndCell,
+				Formula:     formula.Formula,
+			}
+
+			switch r.Kind {
+			case RangeCategories:
+				if entry.Categories.Sheet != "" {
+					return nil, "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("duplicate categories range for series %d", series.Index)
+				}
+				entry.Categories = r
+			case RangeValues:
+				if entry.Values.Sheet != "" {
+					return nil, "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("duplicate values range for series %d", series.Index)
+				}
+				entry.Values = r
+			case RangeSeriesName:
+				if entry.Name != nil {
+					return nil, "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("duplicate series name range for series %d", series.Index)
+				}
+				copy := r
+				entry.Name = &copy
+			default:
+				return nil, "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("unknown chart formula kind %q", formula.Kind)
+			}
+		}
+	}
+
+	var catKey string
+	var catRange ChartRange
+	for _, entry := range seriesRanges {
+		if entry.Categories.Sheet == "" || entry.Values.Sheet == "" {
+			return nil, "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("mixed chart requires categories and values for each series")
+		}
+		if _, err := expandRangeCells(entry.Categories.StartCell, entry.Categories.EndCell); err != nil {
+			return nil, "CHART_DEPENDENCIES_PARSE_FAILED", err
+		}
+		if _, err := expandRangeCells(entry.Values.StartCell, entry.Values.EndCell); err != nil {
+			return nil, "CHART_DEPENDENCIES_PARSE_FAILED", err
+		}
+		key := entry.Categories.Sheet + "!" + entry.Categories.StartCell + ":" + entry.Categories.EndCell
+		if catKey == "" {
+			catKey = key
+			catRange = entry.Categories
+		} else if key != catKey {
+			return nil, "CHART_DEPENDENCIES_PARSE_FAILED", fmt.Errorf("mixed chart categories must match across series")
+		}
+	}
+
+	ordered, err := orderMixedSeries(seriesRanges)
+	if err != nil {
+		return nil, "WRITE_MIX_UNSUPPORTED_SHAPE", err
+	}
+
+	return &mixedWriteDeps{
+		Categories: catRange,
+		Series:     ordered,
+	}, "", nil
+}
+
+func findMixedPlots(plots []chartxml.MixedPlot) (chartxml.MixedPlot, chartxml.MixedPlot, error) {
+	var barPlot *chartxml.MixedPlot
+	var linePlot *chartxml.MixedPlot
+	for i := range plots {
+		plot := &plots[i]
+		switch plot.PlotType {
+		case "bar":
+			if barPlot != nil {
+				return chartxml.MixedPlot{}, chartxml.MixedPlot{}, fmt.Errorf("multiple bar plots are unsupported")
+			}
+			barPlot = plot
+		case "line":
+			if linePlot != nil {
+				return chartxml.MixedPlot{}, chartxml.MixedPlot{}, fmt.Errorf("multiple line plots are unsupported")
+			}
+			linePlot = plot
+		default:
+			return chartxml.MixedPlot{}, chartxml.MixedPlot{}, fmt.Errorf("unsupported plot type %q", plot.PlotType)
+		}
+	}
+	if barPlot == nil || linePlot == nil {
+		return chartxml.MixedPlot{}, chartxml.MixedPlot{}, fmt.Errorf("mixed chart requires bar and line plots")
+	}
+	if len(plots) != 2 {
+		return chartxml.MixedPlot{}, chartxml.MixedPlot{}, fmt.Errorf("mixed chart requires exactly two plots")
+	}
+	return *barPlot, *linePlot, nil
+}
+
+func orderMixedSeries(series map[int]*mixedWriteSeries) ([]mixedWriteSeries, error) {
+	bars := make([]mixedWriteSeries, 0)
+	lines := make([]mixedWriteSeries, 0)
+
+	for _, entry := range series {
+		switch entry.PlotType {
+		case "bar":
+			bars = append(bars, *entry)
+		case "line":
+			lines = append(lines, *entry)
+		default:
+			return nil, fmt.Errorf("unsupported plot type %q", entry.PlotType)
+		}
+	}
+
+	if len(bars) == 0 || len(lines) == 0 {
+		return nil, fmt.Errorf("mixed chart requires bar and line series")
+	}
+
+	sort.Slice(bars, func(i, j int) bool {
+		if bars[i].PlotIndex == bars[j].PlotIndex {
+			return bars[i].SeriesIndex < bars[j].SeriesIndex
+		}
+		return bars[i].PlotIndex < bars[j].PlotIndex
+	})
+	sort.Slice(lines, func(i, j int) bool {
+		if lines[i].PlotIndex == lines[j].PlotIndex {
+			return lines[i].SeriesIndex < lines[j].SeriesIndex
+		}
+		return lines[i].PlotIndex < lines[j].PlotIndex
+	})
+
+	return append(bars, lines...), nil
+}
+
+func equalStringSlice(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 func validateCellValue(value CellValue) error {
 	if value.Number == nil && value.String == nil {
 		return fmt.Errorf("cell value must specify number or string")
@@ -937,21 +1344,26 @@ func (d *Document) handleChartCacheError(dep ChartDependencies, err error) error
 }
 
 func (d *Document) validateWritableChart(dep ChartDependencies) error {
-	if dep.ChartType == "mixed" || (dep.ChartType != "bar" && dep.ChartType != "line" && dep.ChartType != "pie" && dep.ChartType != "area") {
-		return d.handleChartTypeUnsupported(dep)
-	}
-	if dep.ChartType == "pie" {
+	switch dep.ChartType {
+	case "mixed":
+		if code, err := d.validateMixedWrite(dep); err != nil {
+			return d.handleMixedWriteError(dep, code, err)
+		}
+	case "pie":
 		if code, err := validatePieDependencies(dep); err != nil {
 			return d.handlePieWriteError(dep, code, err)
 		}
-	}
-	if dep.ChartType == "area" {
+	case "area":
 		if code, err := d.validateAreaVariant(dep); err != nil {
 			return d.handleAreaWriteError(dep, code, err)
 		}
 		if code, err := validateAreaDependencies(dep); err != nil {
 			return d.handleAreaWriteError(dep, code, err)
 		}
+	case "bar", "line":
+		return nil
+	default:
+		return d.handleChartTypeUnsupported(dep)
 	}
 	return nil
 }
@@ -970,6 +1382,41 @@ func (d *Document) handleChartTypeUnsupported(dep ChartDependencies) error {
 			"slide":     dep.SlidePath,
 			"chart":     dep.ChartPath,
 			"chartType": dep.ChartType,
+		},
+	})
+
+	return err
+}
+
+func (d *Document) validateMixedWrite(dep ChartDependencies) (string, error) {
+	_, code, err := d.mixedWriteDependencies(dep)
+	return code, err
+}
+
+func (d *Document) handleMixedWriteError(dep ChartDependencies, code string, err error) error {
+	if d.opts.Mode != BestEffort {
+		return err
+	}
+
+	message := "Mixed chart is unsupported; chart is skipped"
+	switch code {
+	case "WRITE_MIX_SECONDARY_AXIS_UNSUPPORTED":
+		message = "Mixed chart uses secondary axis; chart is skipped"
+	case "WRITE_MIX_UNSUPPORTED_SHAPE":
+		message = "Mixed chart shape is unsupported; chart is skipped"
+	case "CHART_DEPENDENCIES_PARSE_FAILED":
+		message = "Failed to extract chart dependencies; chart is skipped"
+	}
+
+	d.addAlert(Alert{
+		Level:   "warn",
+		Code:    code,
+		Message: message,
+		Context: map[string]string{
+			"slide":    dep.SlidePath,
+			"chart":    dep.ChartPath,
+			"workbook": dep.WorkbookPath,
+			"error":    err.Error(),
 		},
 	})
 

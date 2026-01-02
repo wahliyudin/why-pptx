@@ -40,6 +40,10 @@ flows; Strict mode generally returns errors instead of recording alerts.
   Context: slide, chart, workbook, error
 - WRITE_AREA_UNSUPPORTED_VARIANT: area chart variant is unsupported; chart is skipped.
   Context: slide, chart, workbook, error
+- WRITE_MIX_UNSUPPORTED_SHAPE: mixed chart shape is unsupported; chart is skipped.
+  Context: slide, chart, workbook, error
+- WRITE_MIX_SECONDARY_AXIS_UNSUPPORTED: mixed chart uses secondary axis; chart is skipped.
+  Context: slide, chart, workbook, error
 
 ## Cache sync
 

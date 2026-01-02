@@ -63,6 +63,10 @@ if err := doc.SaveFile("out.pptx"); err != nil {
 }
 ```
 
+For mixed bar+line charts, ApplyChartData uses a deterministic series order:
+all bar series first (by plot order), then line series. Provide `values:0`,
+`values:1`, … in that order.
+
 ## List charts by title
 
 ```go
@@ -108,8 +112,9 @@ for _, chart := range plan.Charts {
 
 ExtractChartDataByPath reads embedded workbook values without modifying the PPTX.
 Read-only extraction/export supports bar, line, pie, area, and bar+line mixed
-charts. The edit pipeline supports bar/line, single-series pie, and multi-series
-area charts (standard grouping, primary axis only).
+charts. The edit pipeline supports bar/line, single-series pie, multi-series
+area (standard grouping, primary axis only), and mixed bar+line charts that
+share a single axis set (no secondary axis).
 Single-chart extraction returns an error on unsupported input in both modes.
 In BestEffort, use ExtractAllCharts/ExportAllCharts to skip charts with alerts.
 
@@ -199,7 +204,7 @@ doc, err := pptx.OpenFile("in.pptx", pptx.WithOptions(opts))
 
 ## Limitations (v0.3)
 
-- Bar/line charts, single-series pie, and multi-series area charts (standard grouping, primary axis only) for edits and cache sync.
+- Bar/line charts, single-series pie, multi-series area (standard grouping, primary axis only), and mixed bar+line charts (single axis only) for edits and cache sync.
 - Read-only extraction/export supports bar, line, pie, area, and bar+line mixed charts.
 - Inline strings only (no sharedStrings).
 - 1D ranges only (no 2D ranges).

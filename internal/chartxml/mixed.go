@@ -4,18 +4,27 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 )
 
 type MixedSeries struct {
 	Index    int
 	PlotType string
+	PlotIndex int
 	Axis     string
 	Formulas []Formula
 }
 
+type MixedPlot struct {
+	PlotType      string
+	AxisIDs       []string
+	SeriesIndices []int
+}
+
 type MixedChart struct {
 	Series []MixedSeries
+	Plots  []MixedPlot
 }
 
 func ParseMixed(r io.Reader) (*MixedChart, error) {
@@ -90,9 +99,12 @@ func ParseMixed(r io.Reader) (*MixedChart, error) {
 				case "ser":
 					if serDepth == 0 {
 						seriesIndex++
+						plotSeriesIndex := plots[currentPlot].seriesCount
+						plots[currentPlot].seriesCount++
 						out.Series = append(out.Series, MixedSeries{
-							Index:    seriesIndex,
-							PlotType: plots[currentPlot].plotType,
+							Index:     seriesIndex,
+							PlotType:  plots[currentPlot].plotType,
+							PlotIndex: plotSeriesIndex,
 						})
 						currentSeries = len(out.Series) - 1
 						plots[currentPlot].seriesIndices = append(plots[currentPlot].seriesIndices, seriesIndex)
@@ -199,6 +211,7 @@ func ParseMixed(r io.Reader) (*MixedChart, error) {
 	}
 
 	assignMixedAxes(out.Series, plots)
+	out.Plots = plotsToMixed(plots)
 
 	return out, nil
 }
@@ -207,6 +220,7 @@ type plotState struct {
 	plotType      string
 	axisIDs       map[string]struct{}
 	seriesIndices []int
+	seriesCount   int
 }
 
 func newPlotState(plotType string) *plotState {
@@ -257,6 +271,27 @@ func equalStringSets(a, b map[string]struct{}) bool {
 func hasPlot(plotTypes map[string]struct{}, plot string) bool {
 	_, ok := plotTypes[plot]
 	return ok
+}
+
+func plotsToMixed(plots []*plotState) []MixedPlot {
+	out := make([]MixedPlot, len(plots))
+	for i, plot := range plots {
+		out[i] = MixedPlot{
+			PlotType:      plot.plotType,
+			AxisIDs:       sortedKeys(plot.axisIDs),
+			SeriesIndices: append([]int(nil), plot.seriesIndices...),
+		}
+	}
+	return out
+}
+
+func sortedKeys(values map[string]struct{}) []string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func isUnsupportedPlot(name string) bool {

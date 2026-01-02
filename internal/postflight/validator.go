@@ -338,6 +338,7 @@ type cacheState struct {
 	kind          string
 	role          string
 	seriesIndex   int
+	plotType      string
 	ptCount       int
 	ptCountSeen   bool
 	ptCountValue  string
@@ -368,10 +369,18 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 	catDepth := 0
 	valDepth := 0
 	txDepth := 0
+	barDepth := 0
+	lineDepth := 0
+	currentPlotType := ""
 	areaDepth := 0
 	areaSeries := make(map[int]struct{})
 	areaCategories := make(map[int][]string)
 	areaValueCounts := make(map[int]int)
+	hasBarSeries := false
+	hasLineSeries := false
+	mixedSeries := make(map[int]struct{})
+	mixedCategories := make(map[int][]string)
+	mixedValueCounts := make(map[int]int)
 	var cache *cacheState
 
 	for {
@@ -388,12 +397,27 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 		switch tok := token.(type) {
 		case xml.StartElement:
 			switch tok.Name.Local {
+			case "barChart":
+				barDepth++
+			case "lineChart":
+				lineDepth++
 			case "areaChart":
 				areaDepth++
 			case "ser":
 				if serDepth == 0 {
 					seriesCounter++
 					currentSeries = seriesCounter
+					if barDepth > 0 {
+						currentPlotType = "bar"
+						hasBarSeries = true
+						mixedSeries[currentSeries] = struct{}{}
+					} else if lineDepth > 0 {
+						currentPlotType = "line"
+						hasLineSeries = true
+						mixedSeries[currentSeries] = struct{}{}
+					} else {
+						currentPlotType = ""
+					}
 					if areaDepth > 0 {
 						areaSeries[currentSeries] = struct{}{}
 					}
@@ -428,6 +452,7 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 					kind:        tok.Name.Local,
 					role:        role,
 					seriesIndex: currentSeries,
+					plotType:    currentPlotType,
 					ptIdx:       make(map[int]struct{}),
 					inArea:      areaDepth > 0,
 				}
@@ -467,6 +492,14 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 			}
 		case xml.EndElement:
 			switch tok.Name.Local {
+			case "barChart":
+				if barDepth > 0 {
+					barDepth--
+				}
+			case "lineChart":
+				if lineDepth > 0 {
+					lineDepth--
+				}
 			case "areaChart":
 				if areaDepth > 0 {
 					areaDepth--
@@ -477,6 +510,7 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 				}
 				if serDepth == 0 {
 					currentSeries = -1
+					currentPlotType = ""
 					catDepth = 0
 					valDepth = 0
 					txDepth = 0
@@ -505,7 +539,7 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 						if !cache.ptHasValue {
 							return v.cacheError(ctx, chartPath, cache, fmt.Errorf("missing strCache value"))
 						}
-						if cache.inArea && cache.role == "categories" {
+						if cache.role == "categories" && (cache.inArea || cache.plotType != "") {
 							cache.values = append(cache.values, cache.ptValue)
 						}
 					} else if cache.kind == "numCache" {
@@ -533,6 +567,13 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 							areaCategories[cache.seriesIndex] = append([]string(nil), cache.values...)
 						} else if cache.role == "values" {
 							areaValueCounts[cache.seriesIndex] = cache.ptCount
+						}
+					}
+					if cache.plotType != "" {
+						if cache.role == "categories" {
+							mixedCategories[cache.seriesIndex] = append([]string(nil), cache.values...)
+						} else if cache.role == "values" {
+							mixedValueCounts[cache.seriesIndex] = cache.ptCount
 						}
 					}
 					cache = nil
@@ -573,6 +614,34 @@ func (v *PostflightValidator) checkChartCaches(ctx ValidateContext, stage *overl
 		}
 	}
 
+	if hasBarSeries && hasLineSeries {
+		if len(mixedCategories) != len(mixedSeries) {
+			return v.mixedCacheError(ctx, chartPath, -1, fmt.Errorf("missing categories cache for mixed chart"))
+		}
+		if len(mixedValueCounts) != len(mixedSeries) {
+			return v.mixedCacheError(ctx, chartPath, -1, fmt.Errorf("missing values cache for mixed chart"))
+		}
+
+		seriesKeys := sortedSeries(mixedSeries)
+		baseCats := mixedCategories[seriesKeys[0]]
+		baseCount := mixedValueCounts[seriesKeys[0]]
+		for _, idx := range seriesKeys {
+			cats, ok := mixedCategories[idx]
+			if !ok {
+				return v.mixedCacheError(ctx, chartPath, idx, fmt.Errorf("missing categories cache for series %d", idx))
+			}
+			if !equalStrings(cats, baseCats) {
+				return v.mixedCacheError(ctx, chartPath, idx, fmt.Errorf("mixed chart categories must match across series"))
+			}
+			if mixedValueCounts[idx] != baseCount {
+				return v.mixedCacheError(ctx, chartPath, idx, fmt.Errorf("mixed chart ptCount mismatch across series"))
+			}
+			if len(cats) != baseCount {
+				return v.mixedCacheError(ctx, chartPath, idx, fmt.Errorf("mixed chart categories/values length mismatch"))
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -587,6 +656,16 @@ func (v *PostflightValidator) cacheError(ctx ValidateContext, chartPath string, 
 }
 
 func (v *PostflightValidator) areaCacheError(ctx ValidateContext, chartPath string, seriesIndex int, err error) error {
+	extra := map[string]string{
+		"partPath": chartPath,
+	}
+	if seriesIndex >= 0 {
+		extra["seriesIndex"] = fmt.Sprintf("%d", seriesIndex)
+	}
+	return v.wrapError("POSTFLIGHT_CHART_CACHE_INVALID", err, ctx, extra)
+}
+
+func (v *PostflightValidator) mixedCacheError(ctx ValidateContext, chartPath string, seriesIndex int, err error) error {
 	extra := map[string]string{
 		"partPath": chartPath,
 	}
